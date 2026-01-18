@@ -459,3 +459,21 @@ func (w *Worker) UpdateCost(cost string, tokens int) {
 	w.TotalCost = cost
 	w.TotalTokens = tokens
 }
+
+// SendMessage sends a message to the worker's active Claude session.
+func (w *Worker) SendMessage(message string) error {
+	w.mu.RLock()
+	client := w.client
+	status := w.Status
+	w.mu.RUnlock()
+
+	if status != StatusWorking {
+		return fmt.Errorf("worker is not actively working")
+	}
+
+	if client == nil {
+		return fmt.Errorf("no active session")
+	}
+
+	return client.SendInput(message)
+}

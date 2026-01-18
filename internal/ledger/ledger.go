@@ -29,6 +29,7 @@ const (
 	EventWorkerRemoved  EventType = "worker.removed"
 	EventWorkerError    EventType = "worker.error"
 	EventWorkerStuck    EventType = "worker.stuck"
+	EventWorkerMessage  EventType = "worker.message"
 
 	// Job events
 	EventJobCreated   EventType = "job.created"

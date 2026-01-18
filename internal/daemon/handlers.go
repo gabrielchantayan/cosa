@@ -530,6 +530,116 @@ func (s *Server) handleQueueStatus(req *protocol.Request) *protocol.Response {
 	return resp
 }
 
+func (s *Server) handleWorkerDetail(req *protocol.Request) *protocol.Response {
+	var params struct {
+		Name string `json:"name"`
+	}
+	if req.Params != nil {
+		json.Unmarshal(req.Params, &params)
+	}
+
+	w, exists := s.pool.Get(params.Name)
+	if !exists {
+		w, exists = s.pool.GetByID(params.Name)
+	}
+	if !exists {
+		resp, _ := protocol.NewErrorResponse(req.ID, protocol.ErrWorkerNotFound, "worker not found", nil)
+		return resp
+	}
+
+	info := protocol.WorkerDetailInfo{
+		ID:            w.ID,
+		Name:          w.Name,
+		Role:          string(w.Role),
+		Status:        string(w.GetStatus()),
+		Worktree:      w.Worktree,
+		Branch:        w.Branch,
+		SessionID:     w.SessionID,
+		JobsCompleted: w.JobsCompleted,
+		JobsFailed:    w.JobsFailed,
+		TotalCost:     w.TotalCost,
+		TotalTokens:   w.TotalTokens,
+		CreatedAt:     w.CreatedAt.Unix(),
+	}
+	if j := w.GetCurrentJob(); j != nil {
+		info.CurrentJob = j.ID
+	}
+
+	resp, _ := protocol.NewResponse(req.ID, info)
+	return resp
+}
+
+func (s *Server) handleWorkerMessage(req *protocol.Request) *protocol.Response {
+	var params struct {
+		Name    string `json:"name"`
+		Message string `json:"message"`
+	}
+	if req.Params != nil {
+		json.Unmarshal(req.Params, &params)
+	}
+
+	if params.Message == "" {
+		resp, _ := protocol.NewErrorResponse(req.ID, protocol.InvalidParams, "message is required", nil)
+		return resp
+	}
+
+	w, exists := s.pool.Get(params.Name)
+	if !exists {
+		w, exists = s.pool.GetByID(params.Name)
+	}
+	if !exists {
+		resp, _ := protocol.NewErrorResponse(req.ID, protocol.ErrWorkerNotFound, "worker not found", nil)
+		return resp
+	}
+
+	if err := w.SendMessage(params.Message); err != nil {
+		resp, _ := protocol.NewErrorResponse(req.ID, protocol.ErrInvalidState, err.Error(), nil)
+		return resp
+	}
+
+	s.ledger.Append(ledger.EventWorkerMessage, ledger.WorkerEventData{
+		ID:   w.ID,
+		Name: w.Name,
+	})
+
+	resp, _ := protocol.NewResponse(req.ID, map[string]string{"status": "sent"})
+	return resp
+}
+
+func (s *Server) handleJobStatus(req *protocol.Request) *protocol.Response {
+	var params struct {
+		ID string `json:"id"`
+	}
+	if req.Params != nil {
+		json.Unmarshal(req.Params, &params)
+	}
+
+	j, exists := s.jobs.Get(params.ID)
+	if !exists {
+		resp, _ := protocol.NewErrorResponse(req.ID, protocol.ErrJobNotFound, "job not found", nil)
+		return resp
+	}
+
+	info := protocol.JobInfo{
+		ID:          j.ID,
+		Description: j.Description,
+		Status:      string(j.GetStatus()),
+		Priority:    j.Priority,
+		Worker:      j.Worker,
+		DependsOn:   j.DependsOn,
+		CreatedAt:   j.CreatedAt.Unix(),
+	}
+	if j.StartedAt != nil {
+		info.StartedAt = j.StartedAt.Unix()
+	}
+	if j.CompletedAt != nil {
+		info.CompletedAt = j.CompletedAt.Unix()
+	}
+
+	resp, _ := protocol.NewResponse(req.ID, info)
+	return resp
+}
+
 // loadExistingTerritory tries to load an existing territory from the working directory
 func (s *Server) loadExistingTerritory(path string) error {
 	s.mu.Lock()

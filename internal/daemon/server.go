@@ -305,12 +305,18 @@ func (s *Server) handleRequest(req *protocol.Request, conn net.Conn) *protocol.R
 		return s.handleWorkerStatus(req)
 	case protocol.MethodWorkerRemove:
 		return s.handleWorkerRemove(req)
+	case protocol.MethodWorkerDetail:
+		return s.handleWorkerDetail(req)
+	case protocol.MethodWorkerMessage:
+		return s.handleWorkerMessage(req)
 	case protocol.MethodJobAdd:
 		return s.handleJobAdd(req)
 	case protocol.MethodJobList:
 		return s.handleJobList(req)
 	case protocol.MethodJobCancel:
 		return s.handleJobCancel(req)
+	case protocol.MethodJobStatus:
+		return s.handleJobStatus(req)
 	case protocol.MethodJobAssign:
 		return s.handleJobAssign(req)
 	case protocol.MethodQueueStatus:
