@@ -218,6 +218,8 @@ func IsGitRepo(path string) bool {
 }
 
 // FindRepoRoot finds the root of the git repository.
+// Note: If called from a worktree, this returns the worktree path, not the main repo.
+// Use FindMainRepoRoot if you need the main repository root.
 func FindRepoRoot(path string) (string, error) {
 	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
 	cmd.Dir = path
@@ -226,4 +228,29 @@ func FindRepoRoot(path string) (string, error) {
 		return "", fmt.Errorf("not a git repository: %w", err)
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// FindMainRepoRoot finds the root of the main git repository, even when called from a worktree.
+// This is useful for finding shared resources like .cosa directory.
+func FindMainRepoRoot(path string) (string, error) {
+	// Get the common git directory (shared between main repo and worktrees)
+	cmd := exec.Command("git", "rev-parse", "--git-common-dir")
+	cmd.Dir = path
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("not a git repository: %w", err)
+	}
+
+	gitCommonDir := strings.TrimSpace(string(out))
+
+	// The common dir is either ".git" (main repo) or an absolute path to main repo's .git
+	// In either case, the repo root is the parent directory
+	if gitCommonDir == ".git" {
+		// We're in the main repo, use standard method
+		return FindRepoRoot(path)
+	}
+
+	// gitCommonDir is absolute path like /path/to/repo/.git
+	// The repo root is its parent
+	return filepath.Dir(gitCommonDir), nil
 }
