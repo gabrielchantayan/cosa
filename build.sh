@@ -1,0 +1,16 @@
+#!/bin/bash
+
+echo "Building cosa"
+
+echo "Cleaning up old binaries"
+
+rm -rf bin/
+rm -f ~/.cosa/cosa.sock
+rm -f ~/.cosa/cosad.pid
+
+echo "Building new binaries"
+
+go build -o bin/cosa ./cmd/cosa
+go build -o bin/cosad ./cmd/cosad
+
+echo "Done"
