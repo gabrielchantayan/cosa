@@ -1,0 +1,302 @@
+// Package component provides UI components for the TUI.
+package component
+
+import (
+	"strings"
+
+	"github.com/charmbracelet/lipgloss"
+
+	"cosa/internal/tui/theme"
+)
+
+// Dialog is a modal dialog component.
+type Dialog struct {
+	title   string
+	content string
+	width   int
+	height  int
+	visible bool
+
+	// Input field
+	input       *Input
+	hasInput    bool
+	inputLabel  string
+
+	// Buttons
+	buttons        []DialogButton
+	selectedButton int
+}
+
+// DialogButton represents a dialog button.
+type DialogButton struct {
+	Label   string
+	Action  string // Identifier for the action
+	Primary bool
+}
+
+// NewDialog creates a new dialog.
+func NewDialog(title string) *Dialog {
+	return &Dialog{
+		title:   title,
+		buttons: make([]DialogButton, 0),
+	}
+}
+
+// SetSize sets the dialog dimensions.
+func (d *Dialog) SetSize(width, height int) {
+	d.width = width
+	d.height = height
+	if d.input != nil {
+		d.input.SetWidth(width - 8)
+	}
+}
+
+// SetContent sets the dialog content.
+func (d *Dialog) SetContent(content string) {
+	d.content = content
+}
+
+// SetInput enables input mode with a label.
+func (d *Dialog) SetInput(label string) {
+	d.hasInput = true
+	d.inputLabel = label
+	d.input = NewInput()
+	d.input.SetWidth(d.width - 8)
+	d.input.Focus()
+}
+
+// AddButton adds a button to the dialog.
+func (d *Dialog) AddButton(label, action string, primary bool) {
+	d.buttons = append(d.buttons, DialogButton{
+		Label:   label,
+		Action:  action,
+		Primary: primary,
+	})
+}
+
+// Show makes the dialog visible.
+func (d *Dialog) Show() {
+	d.visible = true
+	if d.input != nil {
+		d.input.Focus()
+	}
+}
+
+// Hide hides the dialog.
+func (d *Dialog) Hide() {
+	d.visible = false
+	if d.input != nil {
+		d.input.Reset()
+	}
+}
+
+// Visible returns true if the dialog is visible.
+func (d *Dialog) Visible() bool {
+	return d.visible
+}
+
+// GetInputValue returns the current input value.
+func (d *Dialog) GetInputValue() string {
+	if d.input != nil {
+		return d.input.Value()
+	}
+	return ""
+}
+
+// SelectedAction returns the selected button's action.
+func (d *Dialog) SelectedAction() string {
+	if d.selectedButton >= 0 && d.selectedButton < len(d.buttons) {
+		return d.buttons[d.selectedButton].Action
+	}
+	return ""
+}
+
+// HandleKey handles key presses.
+func (d *Dialog) HandleKey(key string) string {
+	if d.hasInput && d.input != nil {
+		switch key {
+		case "tab":
+			// Move focus from input to buttons
+			if d.input.Focused() && len(d.buttons) > 0 {
+				d.input.Blur()
+				d.selectedButton = 0
+			} else if !d.input.Focused() {
+				d.input.Focus()
+				d.selectedButton = -1
+			}
+			return ""
+		case "enter":
+			if !d.input.Focused() && d.selectedButton >= 0 {
+				return d.buttons[d.selectedButton].Action
+			}
+			// If input focused, submit with first primary button
+			for _, btn := range d.buttons {
+				if btn.Primary {
+					return btn.Action
+				}
+			}
+			if len(d.buttons) > 0 {
+				return d.buttons[0].Action
+			}
+			return ""
+		case "left":
+			if !d.input.Focused() && d.selectedButton > 0 {
+				d.selectedButton--
+			}
+			return ""
+		case "right":
+			if !d.input.Focused() && d.selectedButton < len(d.buttons)-1 {
+				d.selectedButton++
+			}
+			return ""
+		case "esc":
+			return "cancel"
+		default:
+			if d.input.Focused() {
+				d.input.HandleKey(key)
+			}
+			return ""
+		}
+	}
+
+	// No input, just buttons
+	switch key {
+	case "tab", "right":
+		if d.selectedButton < len(d.buttons)-1 {
+			d.selectedButton++
+		} else {
+			d.selectedButton = 0
+		}
+	case "shift+tab", "left":
+		if d.selectedButton > 0 {
+			d.selectedButton--
+		} else {
+			d.selectedButton = len(d.buttons) - 1
+		}
+	case "enter":
+		if d.selectedButton >= 0 && d.selectedButton < len(d.buttons) {
+			return d.buttons[d.selectedButton].Action
+		}
+	case "esc":
+		return "cancel"
+	}
+	return ""
+}
+
+// View renders the dialog.
+func (d *Dialog) View() string {
+	if !d.visible {
+		return ""
+	}
+
+	t := theme.Current
+
+	// Title bar
+	titleStyle := lipgloss.NewStyle().
+		Foreground(t.Primary).
+		Bold(true).
+		Padding(0, 1)
+
+	// Content
+	contentStyle := lipgloss.NewStyle().
+		Foreground(t.Text).
+		Padding(1, 2)
+
+	// Build content sections
+	var sections []string
+
+	// Title
+	sections = append(sections, titleStyle.Render(d.title))
+
+	// Content text
+	if d.content != "" {
+		sections = append(sections, contentStyle.Render(d.content))
+	}
+
+	// Input field
+	if d.hasInput && d.input != nil {
+		labelStyle := lipgloss.NewStyle().
+			Foreground(t.TextMuted).
+			Padding(0, 2)
+		inputSection := lipgloss.JoinVertical(lipgloss.Left,
+			labelStyle.Render(d.inputLabel),
+			"  "+d.input.View(),
+		)
+		sections = append(sections, inputSection)
+	}
+
+	// Buttons
+	if len(d.buttons) > 0 {
+		var btnViews []string
+		for i, btn := range d.buttons {
+			var style lipgloss.Style
+			if i == d.selectedButton {
+				if btn.Primary {
+					style = lipgloss.NewStyle().
+						Background(t.Primary).
+						Foreground(t.Background).
+						Bold(true).
+						Padding(0, 2)
+				} else {
+					style = lipgloss.NewStyle().
+						Background(t.Surface).
+						Foreground(t.Primary).
+						Bold(true).
+						Padding(0, 2)
+				}
+			} else {
+				if btn.Primary {
+					style = lipgloss.NewStyle().
+						Foreground(t.Primary).
+						Padding(0, 2)
+				} else {
+					style = lipgloss.NewStyle().
+						Foreground(t.TextMuted).
+						Padding(0, 2)
+				}
+			}
+			btnViews = append(btnViews, style.Render(btn.Label))
+		}
+		buttonRow := strings.Join(btnViews, "  ")
+		sections = append(sections, lipgloss.NewStyle().Padding(1, 2).Render(buttonRow))
+	}
+
+	content := lipgloss.JoinVertical(lipgloss.Left, sections...)
+
+	// Dialog box
+	dialogStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(t.BorderActive).
+		Background(t.Background).
+		Width(d.width).
+		Height(d.height)
+
+	return dialogStyle.Render(content)
+}
+
+// CenterIn returns the dialog centered in the given dimensions.
+func (d *Dialog) CenterIn(screenWidth, screenHeight int) string {
+	dialog := d.View()
+	if dialog == "" {
+		return ""
+	}
+
+	dialogWidth := lipgloss.Width(dialog)
+	dialogHeight := lipgloss.Height(dialog)
+
+	// Calculate padding
+	padLeft := (screenWidth - dialogWidth) / 2
+	padTop := (screenHeight - dialogHeight) / 2
+
+	if padLeft < 0 {
+		padLeft = 0
+	}
+	if padTop < 0 {
+		padTop = 0
+	}
+
+	return lipgloss.NewStyle().
+		PaddingLeft(padLeft).
+		PaddingTop(padTop).
+		Render(dialog)
+}
