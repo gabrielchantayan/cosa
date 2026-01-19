@@ -76,9 +76,12 @@ func (w *WorkerList) View() string {
 	}
 
 	var lines []string
-	contentHeight := w.height - 2 // Account for title
+	contentHeight := w.height
+	if contentHeight < 1 {
+		contentHeight = 1
+	}
 
-	// Calculate visible range
+	// Calculate visible range based on selection
 	start := 0
 	if w.selected >= contentHeight {
 		start = w.selected - contentHeight + 1
@@ -112,7 +115,11 @@ func (w *WorkerList) renderWorkerLine(worker protocol.WorkerInfo, selected bool)
 
 	// Role badge
 	roleStyle := w.styles.RoleStyle(worker.Role)
-	role := roleStyle.Render(fmt.Sprintf("[%s]", worker.Role[:3]))
+	roleAbbrev := worker.Role
+	if len(roleAbbrev) > 3 {
+		roleAbbrev = roleAbbrev[:3]
+	}
+	role := roleStyle.Render(fmt.Sprintf("[%s]", roleAbbrev))
 
 	// Status style
 	statusStyle := w.styles.StatusStyle(worker.Status)
@@ -202,7 +209,10 @@ func (j *JobList) View() string {
 	}
 
 	var lines []string
-	contentHeight := j.height - 2
+	contentHeight := j.height
+	if contentHeight < 1 {
+		contentHeight = 1
+	}
 
 	start := 0
 	if j.selected >= contentHeight {
@@ -307,9 +317,12 @@ func (a *Activity) View() string {
 	}
 
 	var lines []string
-	contentHeight := a.height - 2
+	contentHeight := a.height
+	if contentHeight < 1 {
+		contentHeight = 1
+	}
 
-	// Show most recent items
+	// Show most recent items (scroll to bottom)
 	start := max(0, len(a.items)-contentHeight)
 	for i := start; i < len(a.items); i++ {
 		item := a.items[i]

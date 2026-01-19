@@ -126,47 +126,87 @@ func (d *Dashboard) updateFocus() {
 }
 
 func (d *Dashboard) updateComponentSizes() {
-	// Left column: 30% width, workers and jobs stacked
+	// Content area height (total - header - footer)
+	contentHeight := d.height - 2
+
+	// Left column: 30% width
 	leftWidth := d.width * 30 / 100
-	leftHeight := (d.height - 4) / 2 // Account for header/footer, split in half
+	if leftWidth < 20 {
+		leftWidth = 20
+	}
 
-	d.workerList.SetSize(leftWidth, leftHeight)
-	d.jobList.SetSize(leftWidth, leftHeight)
+	// Each left panel gets half the content height
+	// Account for panel borders (2 lines each for top/bottom border)
+	leftPanelHeight := contentHeight / 2
+	innerLeftHeight := leftPanelHeight - 2 // Inner height after border
+	if innerLeftHeight < 3 {
+		innerLeftHeight = 3
+	}
 
-	// Right column: 70% width, activity
-	rightWidth := d.width - leftWidth - 3
-	rightHeight := d.height - 4
+	d.workerList.SetSize(leftWidth-2, innerLeftHeight)
+	d.jobList.SetSize(leftWidth-2, innerLeftHeight)
 
-	d.activity.SetSize(rightWidth, rightHeight)
+	// Right column: Activity
+	rightWidth := d.width - leftWidth - 1
+	if rightWidth < 20 {
+		rightWidth = 20
+	}
+	innerRightHeight := contentHeight - 2
+	if innerRightHeight < 5 {
+		innerRightHeight = 5
+	}
+
+	d.activity.SetSize(rightWidth-2, innerRightHeight)
 }
 
 // View renders the dashboard.
 func (d *Dashboard) View() string {
 	t := theme.Current
 
-	// Header
+	// Ensure minimum dimensions
+	if d.width < 40 || d.height < 10 {
+		return lipgloss.NewStyle().
+			Width(d.width).
+			Height(d.height).
+			Align(lipgloss.Center, lipgloss.Center).
+			Foreground(t.TextMuted).
+			Render("Terminal too small")
+	}
+
+	// Header (1 line)
 	header := d.renderHeader()
 
-	// Left column: Workers + Jobs
-	leftWidth := d.width * 30 / 100
-	leftHeight := (d.height - 4) / 2
-
-	workersPanel := d.renderPanel("WORKERS", d.workerList.View(), leftWidth, leftHeight, d.focus == FocusWorkers)
-	jobsPanel := d.renderPanel("JOBS", d.jobList.View(), leftWidth, leftHeight, d.focus == FocusJobs)
-	leftColumn := lipgloss.JoinVertical(lipgloss.Left, workersPanel, jobsPanel)
-
-	// Right column: Activity
-	rightWidth := d.width - leftWidth - 3
-	rightHeight := d.height - 4
-	activityPanel := d.renderPanel("ACTIVITY", d.activity.View(), rightWidth, rightHeight, d.focus == FocusActivity)
-
-	// Join columns
-	content := lipgloss.JoinHorizontal(lipgloss.Top, leftColumn, activityPanel)
-
-	// Footer
+	// Footer (1 line)
 	footer := d.renderFooter()
 
-	// Combine with background
+	// Content area height (total - header - footer)
+	contentHeight := d.height - 2
+
+	// Left column: 30% width, Workers and Jobs stacked
+	leftWidth := d.width * 30 / 100
+	if leftWidth < 20 {
+		leftWidth = 20
+	}
+
+	// Each left panel gets half the content height
+	leftPanelHeight := contentHeight / 2
+
+	workersPanel := d.renderPanel("WORKERS", d.workerList.View(), leftWidth, leftPanelHeight, d.focus == FocusWorkers)
+	jobsPanel := d.renderPanel("JOBS", d.jobList.View(), leftWidth, contentHeight-leftPanelHeight, d.focus == FocusJobs)
+	leftColumn := lipgloss.JoinVertical(lipgloss.Left, workersPanel, jobsPanel)
+
+	// Right column: Activity takes remaining width and full content height
+	rightWidth := d.width - leftWidth - 1 // 1 char gap between columns
+	if rightWidth < 20 {
+		rightWidth = 20
+	}
+	activityPanel := d.renderPanel("ACTIVITY", d.activity.View(), rightWidth, contentHeight, d.focus == FocusActivity)
+
+	// Join columns horizontally with a gap
+	gap := lipgloss.NewStyle().Width(1).Render(" ")
+	content := lipgloss.JoinHorizontal(lipgloss.Top, leftColumn, gap, activityPanel)
+
+	// Combine all sections vertically
 	result := lipgloss.JoinVertical(lipgloss.Left, header, content, footer)
 
 	return lipgloss.NewStyle().
@@ -241,70 +281,86 @@ func (d *Dashboard) renderPanel(title, content string, width, height int, focuse
 	t := theme.Current
 
 	// Ensure minimum dimensions to avoid slice bounds errors
-	if width < 6 {
-		width = 6
+	if width < 8 {
+		width = 8
 	}
-	if height < 4 {
-		height = 4
+	if height < 5 {
+		height = 5
 	}
 
-	var borderStyle lipgloss.Style
+	var borderColor lipgloss.Color
 	var titleStyle lipgloss.Style
 
 	if focused {
-		borderStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(t.BorderActive)
+		borderColor = t.BorderActive
 		titleStyle = lipgloss.NewStyle().
 			Foreground(t.Primary).
 			Bold(true)
 	} else {
-		borderStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(t.Border)
+		borderColor = t.Border
 		titleStyle = lipgloss.NewStyle().
 			Foreground(t.TextMuted)
 	}
 
-	// Title with padding
-	titleStr := titleStyle.Render(fmt.Sprintf(" %s ", title))
+	// Calculate inner content dimensions (accounting for border)
+	innerWidth := width - 2   // 1 char border on each side
+	innerHeight := height - 2 // 1 char border top and bottom
 
-	// Content area
-	contentWidth := width - 4  // Account for borders and padding
-	contentHeight := height - 3 // Account for title and borders
+	if innerWidth < 4 {
+		innerWidth = 4
+	}
+	if innerHeight < 2 {
+		innerHeight = 2
+	}
 
-	// Pad or truncate content
+	// Pad or truncate content to fit
 	contentLines := strings.Split(content, "\n")
-	for len(contentLines) < contentHeight {
+	for len(contentLines) < innerHeight {
 		contentLines = append(contentLines, "")
 	}
-	if len(contentLines) > contentHeight {
-		contentLines = contentLines[:contentHeight]
+	if len(contentLines) > innerHeight {
+		contentLines = contentLines[:innerHeight]
 	}
 
-	// Ensure each line is the right width
+	// Ensure each line fits within the inner width
 	for i, line := range contentLines {
 		lineWidth := lipgloss.Width(line)
-		if lineWidth < contentWidth {
-			contentLines[i] = line + strings.Repeat(" ", contentWidth-lineWidth)
+		if lineWidth < innerWidth {
+			contentLines[i] = line + strings.Repeat(" ", innerWidth-lineWidth)
+		} else if lineWidth > innerWidth {
+			// Truncate line to fit
+			runes := []rune(line)
+			if len(runes) > innerWidth-2 {
+				contentLines[i] = string(runes[:innerWidth-2]) + ".."
+			}
 		}
 	}
 
 	paddedContent := strings.Join(contentLines, "\n")
 
-	panel := borderStyle.
-		Width(width - 2).
-		Height(height - 2).
+	// Build the panel with border
+	panel := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(borderColor).
+		Width(innerWidth).
+		Height(innerHeight).
 		Render(paddedContent)
 
-	// Add title to top border
+	// Insert title into top border
+	titleStr := titleStyle.Render(fmt.Sprintf(" %s ", title))
 	lines := strings.Split(panel, "\n")
 	if len(lines) > 0 {
-		firstLine := lines[0]
-		// Replace part of the top border with the title
-		titleWidth := lipgloss.Width(titleStr)
-		if len(firstLine) > titleWidth+4 {
-			lines[0] = firstLine[:2] + titleStr + firstLine[2+titleWidth:]
+		firstLine := []rune(lines[0])
+		titleRunes := []rune(titleStr)
+		titleWidth := len(titleRunes)
+
+		// Insert title after the first corner character
+		if len(firstLine) > titleWidth+3 {
+			newFirst := make([]rune, 0, len(firstLine))
+			newFirst = append(newFirst, firstLine[0])          // Corner
+			newFirst = append(newFirst, titleRunes...)         // Title
+			newFirst = append(newFirst, firstLine[1+titleWidth:]...) // Rest of border
+			lines[0] = string(newFirst)
 		}
 	}
 
