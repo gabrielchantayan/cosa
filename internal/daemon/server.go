@@ -44,6 +44,9 @@ type Server struct {
 	lookout *worker.Lookout
 	cleaner *worker.Cleaner
 
+	// Chat session for interactive communication with underboss
+	chatSession *ChatSession
+
 	// Client subscriptions for real-time events
 	clients   map[net.Conn]*clientState
 	clientsMu sync.RWMutex
@@ -177,6 +180,14 @@ func (s *Server) Stop() error {
 	// Stop background services
 	s.stopLookout()
 	s.stopCleaner()
+
+	// Stop chat session if active
+	s.mu.Lock()
+	if s.chatSession != nil {
+		s.chatSession.Stop()
+		s.chatSession = nil
+	}
+	s.mu.Unlock()
 
 	// Save active sessions and stop all workers
 	for _, w := range s.pool.List() {
@@ -343,6 +354,14 @@ func (s *Server) handleRequest(req *protocol.Request, conn net.Conn) *protocol.R
 		return s.handleOrderClear(req)
 	case protocol.MethodHandoffGenerate:
 		return s.handleHandoffGenerate(req)
+	case protocol.MethodChatStart:
+		return s.handleChatStart(req)
+	case protocol.MethodChatSend:
+		return s.handleChatSend(req)
+	case protocol.MethodChatEnd:
+		return s.handleChatEnd(req)
+	case protocol.MethodChatHistory:
+		return s.handleChatHistory(req)
 	default:
 		resp, _ := protocol.NewErrorResponse(req.ID, protocol.MethodNotFound, "Method not found", nil)
 		return resp

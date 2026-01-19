@@ -206,6 +206,12 @@ const (
 	// Handoff management
 	MethodHandoffGenerate = "handoff.generate"
 
+	// Chat with underboss
+	MethodChatStart   = "chat.start"
+	MethodChatSend    = "chat.send"
+	MethodChatEnd     = "chat.end"
+	MethodChatHistory = "chat.history"
+
 	// Subscriptions for real-time updates
 	MethodSubscribe   = "subscribe"
 	MethodUnsubscribe = "unsubscribe"
@@ -217,6 +223,7 @@ const (
 	NotifyJobUpdated    = "job.updated"
 	NotifyLogEntry      = "log.entry"
 	NotifyActivity      = "activity"
+	NotifyChatMessage   = "chat.message"
 )
 
 // StatusResult is the response for the status method.
@@ -407,4 +414,38 @@ type HandoffSummary struct {
 	FilesTouched  []string `json:"files_touched,omitempty"`
 	OpenQuestions []string `json:"open_questions,omitempty"`
 	CreatedAt     int64    `json:"created_at"`
+}
+
+// ChatStartParams are parameters for chat.start.
+type ChatStartParams struct {
+	SessionID string `json:"session_id,omitempty"` // Optional: resume existing session
+}
+
+// ChatStartResult is the response for chat.start.
+type ChatStartResult struct {
+	SessionID string `json:"session_id"`
+	Status    string `json:"status"`
+	Greeting  string `json:"greeting,omitempty"`
+}
+
+// ChatSendParams are parameters for chat.send.
+type ChatSendParams struct {
+	Message string `json:"message"`
+}
+
+// ChatSendResult is the response for chat.send.
+type ChatSendResult struct {
+	Response string `json:"response"`
+}
+
+// ChatHistoryResult is the response for chat.history.
+type ChatHistoryResult struct {
+	Messages []ChatMessage `json:"messages"`
+}
+
+// ChatMessage represents a message in the chat history.
+type ChatMessage struct {
+	Role      string `json:"role"` // "user" or "assistant"
+	Content   string `json:"content"`
+	Timestamp int64  `json:"timestamp"`
 }
