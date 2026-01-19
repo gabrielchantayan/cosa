@@ -38,11 +38,18 @@ type errMsg error
 
 // NewApp creates a new TUI application.
 func NewApp(client *daemon.Client) *App {
-	return &App{
+	app := &App{
 		client:    client,
 		dashboard: page.NewDashboard(),
 		styles:    styles.New(),
 	}
+
+	// Set up callbacks
+	app.dashboard.SetOnCreateJob(func(description string) {
+		app.createJob(description)
+	})
+
+	return app
 }
 
 // Init initializes the app.
@@ -315,6 +322,31 @@ func (a *App) tickEvery(d time.Duration) tea.Cmd {
 	return tea.Tick(d, func(t time.Time) tea.Msg {
 		return tickMsg(t)
 	})
+}
+
+func (a *App) createJob(description string) {
+	if a.client == nil {
+		a.dashboard.AddActivity(time.Now().Format("15:04:05"), "", "Error: No connection to daemon")
+		return
+	}
+
+	params := protocol.JobAddParams{
+		Description: description,
+		Priority:    3, // Default priority
+	}
+
+	resp, err := a.client.Call(protocol.MethodJobAdd, params)
+	if err != nil {
+		a.dashboard.AddActivity(time.Now().Format("15:04:05"), "", fmt.Sprintf("Error creating job: %v", err))
+		return
+	}
+
+	if resp.Error != nil {
+		a.dashboard.AddActivity(time.Now().Format("15:04:05"), "", fmt.Sprintf("Error: %s", resp.Error.Message))
+		return
+	}
+
+	a.dashboard.AddActivity(time.Now().Format("15:04:05"), "", fmt.Sprintf("Job created: %s", truncate(description, 30)))
 }
 
 func truncate(s string, maxLen int) string {
