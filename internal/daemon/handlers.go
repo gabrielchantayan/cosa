@@ -281,6 +281,7 @@ func (s *Server) handleWorkerList(req *protocol.Request) *protocol.Response {
 		}
 		if j := w.GetCurrentJob(); j != nil {
 			info.CurrentJob = j.ID
+			info.CurrentJobDesc = j.Description
 		}
 		workers = append(workers, info)
 	}
@@ -380,19 +381,26 @@ func (s *Server) handleJobAdd(req *protocol.Request) *protocol.Response {
 			j.Queue()
 			s.jobs.Save(j) // Persist queued state
 			s.ledger.Append(ledger.EventJobQueued, ledger.JobEventData{
-				ID:     j.ID,
-				Worker: w.ID,
+				ID:          j.ID,
+				Description: j.Description,
+				Worker:      w.ID,
+				WorkerName:  w.Name,
 			})
 
 			go func() {
 				s.ledger.Append(ledger.EventJobStarted, ledger.JobEventData{
-					ID:     j.ID,
-					Worker: w.ID,
+					ID:          j.ID,
+					Description: j.Description,
+					Worker:      w.ID,
+					WorkerName:  w.Name,
 				})
 				if err := w.Execute(j); err != nil {
 					s.ledger.Append(ledger.EventJobFailed, ledger.JobEventData{
-						ID:    j.ID,
-						Error: err.Error(),
+						ID:          j.ID,
+						Description: j.Description,
+						Worker:      w.ID,
+						WorkerName:  w.Name,
+						Error:       err.Error(),
 					})
 				}
 			}()
@@ -502,19 +510,26 @@ func (s *Server) handleJobAssign(req *protocol.Request) *protocol.Response {
 	j.Queue()
 
 	s.ledger.Append(ledger.EventJobQueued, ledger.JobEventData{
-		ID:     j.ID,
-		Worker: w.ID,
+		ID:          j.ID,
+		Description: j.Description,
+		Worker:      w.ID,
+		WorkerName:  w.Name,
 	})
 
 	go func() {
 		s.ledger.Append(ledger.EventJobStarted, ledger.JobEventData{
-			ID:     j.ID,
-			Worker: w.ID,
+			ID:          j.ID,
+			Description: j.Description,
+			Worker:      w.ID,
+			WorkerName:  w.Name,
 		})
 		if err := w.Execute(j); err != nil {
 			s.ledger.Append(ledger.EventJobFailed, ledger.JobEventData{
-				ID:    j.ID,
-				Error: err.Error(),
+				ID:          j.ID,
+				Description: j.Description,
+				Worker:      w.ID,
+				WorkerName:  w.Name,
+				Error:       err.Error(),
 			})
 		}
 	}()

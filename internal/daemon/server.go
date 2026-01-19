@@ -575,20 +575,27 @@ func (sched *scheduler) processQueue() {
 		sched.jobs.Save(j) // Persist queued state
 
 		sched.ledger.Append(ledger.EventJobQueued, ledger.JobEventData{
-			ID:     j.ID,
-			Worker: w.ID,
+			ID:          j.ID,
+			Description: j.Description,
+			Worker:      w.ID,
+			WorkerName:  w.Name,
 		})
 
 		// Execute in goroutine
 		go func(w *worker.Worker, j *job.Job) {
 			sched.ledger.Append(ledger.EventJobStarted, ledger.JobEventData{
-				ID:     j.ID,
-				Worker: w.ID,
+				ID:          j.ID,
+				Description: j.Description,
+				Worker:      w.ID,
+				WorkerName:  w.Name,
 			})
 			if err := w.Execute(j); err != nil {
 				sched.ledger.Append(ledger.EventJobFailed, ledger.JobEventData{
-					ID:    j.ID,
-					Error: err.Error(),
+					ID:          j.ID,
+					Description: j.Description,
+					Worker:      w.ID,
+					WorkerName:  w.Name,
+					Error:       err.Error(),
 				})
 			}
 		}(w, j)
@@ -599,8 +606,18 @@ func (sched *scheduler) processQueue() {
 func (s *Server) onJobComplete(j *job.Job) {
 	s.queue.NotifyCompletion(j.ID)
 	s.jobs.Save(j) // Persist final state
+
+	// Get worker name for logging
+	var workerName string
+	if w, exists := s.pool.GetByID(j.Worker); exists {
+		workerName = w.Name
+	}
+
 	s.ledger.Append(ledger.EventJobCompleted, ledger.JobEventData{
-		ID: j.ID,
+		ID:          j.ID,
+		Description: j.Description,
+		Worker:      j.Worker,
+		WorkerName:  workerName,
 	})
 
 	// Trigger auto-review if enabled
@@ -621,9 +638,19 @@ func (s *Server) onJobComplete(j *job.Job) {
 func (s *Server) onJobFail(j *job.Job, err error) {
 	s.queue.NotifyFailure(j.ID)
 	s.jobs.Save(j) // Persist final state
+
+	// Get worker name for logging
+	var workerName string
+	if w, exists := s.pool.GetByID(j.Worker); exists {
+		workerName = w.Name
+	}
+
 	s.ledger.Append(ledger.EventJobFailed, ledger.JobEventData{
-		ID:    j.ID,
-		Error: err.Error(),
+		ID:          j.ID,
+		Description: j.Description,
+		Worker:      j.Worker,
+		WorkerName:  workerName,
+		Error:       err.Error(),
 	})
 }
 

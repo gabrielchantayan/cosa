@@ -258,12 +258,13 @@ type WorkerAddParams struct {
 
 // WorkerInfo describes a worker.
 type WorkerInfo struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Role      string `json:"role"`
-	Status    string `json:"status"`
-	CurrentJob string `json:"current_job,omitempty"`
-	Worktree  string `json:"worktree,omitempty"`
+	ID             string `json:"id"`
+	Name           string `json:"name"`
+	Role           string `json:"role"`
+	Status         string `json:"status"`
+	CurrentJob     string `json:"current_job,omitempty"`
+	CurrentJobDesc string `json:"current_job_desc,omitempty"`
+	Worktree       string `json:"worktree,omitempty"`
 }
 
 // JobAddParams are parameters for job.add.
