@@ -3,6 +3,7 @@ package component
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -28,8 +29,12 @@ func NewWorkerList() *WorkerList {
 	}
 }
 
-// SetWorkers updates the worker list.
+// SetWorkers updates the worker list, sorted alphabetically by name.
 func (w *WorkerList) SetWorkers(workers []protocol.WorkerInfo) {
+	// Sort workers alphabetically by name
+	sort.Slice(workers, func(i, j int) bool {
+		return strings.ToLower(workers[i].Name) < strings.ToLower(workers[j].Name)
+	})
 	w.workers = workers
 	if w.selected >= len(workers) {
 		w.selected = max(0, len(workers)-1)
@@ -161,8 +166,34 @@ func NewJobList() *JobList {
 	}
 }
 
-// SetJobs updates the job list.
+// jobStatusOrder defines the sort order for job statuses.
+// Active/in-progress statuses come first, then pending, then terminal states.
+var jobStatusOrder = map[string]int{
+	"running":   0,
+	"queued":    1,
+	"pending":   2,
+	"completed": 3,
+	"failed":    4,
+	"cancelled": 5,
+}
+
+// SetJobs updates the job list, sorted by status, then priority, then description.
 func (j *JobList) SetJobs(jobs []protocol.JobInfo) {
+	// Sort jobs: 1) by status order, 2) by priority (lower = higher), 3) alphabetically by description
+	sort.Slice(jobs, func(i, k int) bool {
+		// Compare by status first
+		statusI := jobStatusOrder[jobs[i].Status]
+		statusK := jobStatusOrder[jobs[k].Status]
+		if statusI != statusK {
+			return statusI < statusK
+		}
+		// Then by priority (lower number = higher priority)
+		if jobs[i].Priority != jobs[k].Priority {
+			return jobs[i].Priority < jobs[k].Priority
+		}
+		// Finally alphabetically by description
+		return strings.ToLower(jobs[i].Description) < strings.ToLower(jobs[k].Description)
+	})
 	j.jobs = jobs
 	if j.selected >= len(jobs) {
 		j.selected = max(0, len(jobs)-1)
