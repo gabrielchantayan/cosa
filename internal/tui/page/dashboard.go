@@ -34,6 +34,12 @@ type Dashboard struct {
 	workerList *component.WorkerList
 	jobList    *component.JobList
 	activity   *component.Activity
+
+	// Dialogs
+	newJobDialog *component.Dialog
+
+	// Callbacks
+	onCreateJob func(description string)
 }
 
 // NewDashboard creates a new dashboard page.
@@ -102,6 +108,24 @@ func (d *Dashboard) PrevFocus() {
 
 // HandleKey handles key presses on the focused component.
 func (d *Dashboard) HandleKey(key string) {
+	// Handle dialog input if visible
+	if d.newJobDialog != nil && d.newJobDialog.Visible() {
+		action := d.newJobDialog.HandleKey(key)
+		switch action {
+		case "create":
+			description := d.newJobDialog.GetInputValue()
+			if description != "" && d.onCreateJob != nil {
+				d.onCreateJob(description)
+			}
+			d.newJobDialog.Hide()
+			d.newJobDialog = nil
+		case "cancel":
+			d.newJobDialog.Hide()
+			d.newJobDialog = nil
+		}
+		return
+	}
+
 	switch d.focus {
 	case FocusWorkers:
 		switch key {
@@ -209,11 +233,52 @@ func (d *Dashboard) View() string {
 	// Combine all sections vertically
 	result := lipgloss.JoinVertical(lipgloss.Left, header, content, footer)
 
-	return lipgloss.NewStyle().
+	// Base view
+	baseView := lipgloss.NewStyle().
 		Background(t.Background).
 		Width(d.width).
 		Height(d.height).
 		Render(result)
+
+	// Render dialog overlay if visible
+	if d.newJobDialog != nil && d.newJobDialog.Visible() {
+		return d.renderWithDialogOverlay(baseView)
+	}
+
+	return baseView
+}
+
+func (d *Dashboard) renderWithDialogOverlay(baseView string) string {
+	t := theme.Current
+
+	// Get dialog view centered in the screen
+	dialogView := d.newJobDialog.CenterIn(d.width, d.height)
+
+	// Split base view into lines
+	baseLines := strings.Split(baseView, "\n")
+
+	// Split dialog view into lines
+	dialogLines := strings.Split(dialogView, "\n")
+
+	// Overlay the dialog on top of the base view
+	result := make([]string, d.height)
+	for i := 0; i < d.height && i < len(baseLines); i++ {
+		if i < len(dialogLines) && strings.TrimSpace(dialogLines[i]) != "" {
+			// Use dialog line, but pad to full width
+			dialogLine := dialogLines[i]
+			dialogWidth := lipgloss.Width(dialogLine)
+			if dialogWidth < d.width {
+				dialogLine = dialogLine + strings.Repeat(" ", d.width-dialogWidth)
+			}
+			result[i] = dialogLine
+		} else {
+			result[i] = baseLines[i]
+		}
+	}
+
+	return lipgloss.NewStyle().
+		Background(t.Background).
+		Render(strings.Join(result, "\n"))
 }
 
 func (d *Dashboard) renderHeader() string {
@@ -391,14 +456,22 @@ func max(a, b int) int {
 
 // IsInputMode returns true if the dashboard is in input mode.
 func (d *Dashboard) IsInputMode() bool {
-	// For now, no input mode - will be used when dialogs are added
-	return false
+	return d.newJobDialog != nil && d.newJobDialog.Visible()
+}
+
+// SetOnCreateJob sets the callback for when a job is created.
+func (d *Dashboard) SetOnCreateJob(fn func(description string)) {
+	d.onCreateJob = fn
 }
 
 // ShowNewJobDialog shows the new job dialog.
 func (d *Dashboard) ShowNewJobDialog() {
-	// Stub for new job dialog - will be implemented with full input component
-	d.AddActivity(time.Now().Format("15:04:05"), "", "New job dialog (press ESC to close)")
+	d.newJobDialog = component.NewDialog("New Job")
+	d.newJobDialog.SetInput("Job Description:")
+	d.newJobDialog.AddButton("Create", "create", true)
+	d.newJobDialog.AddButton("Cancel", "cancel", false)
+	d.newJobDialog.SetSize(50, 10)
+	d.newJobDialog.Show()
 }
 
 // ShowNewOperationDialog shows the new operation dialog.
@@ -441,5 +514,8 @@ func (d *Dashboard) SelectCurrent() {
 
 // CloseOverlay closes any open overlay/dialog.
 func (d *Dashboard) CloseOverlay() {
-	// Stub for closing overlays
+	if d.newJobDialog != nil {
+		d.newJobDialog.Hide()
+		d.newJobDialog = nil
+	}
 }
