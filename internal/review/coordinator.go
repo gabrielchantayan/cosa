@@ -237,7 +237,8 @@ func (c *Coordinator) handleReviewError(j *job.Job, status *ReviewStatus, errMsg
 		Error: errMsg,
 	})
 
-	// Don't mark job as failed - leave it in review status for manual intervention
+	// Mark job as failed so it reaches a terminal state and doesn't block dependent jobs
+	j.Fail(fmt.Sprintf("review failed: %s", errMsg))
 }
 
 // updatePhase updates the current phase of a review.
