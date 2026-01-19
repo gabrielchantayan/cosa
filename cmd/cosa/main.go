@@ -159,6 +159,7 @@ func territoryCmd() *cobra.Command {
 		territoryStatusCmd(),
 		territoryListCmd(),
 		territoryAddCmd(),
+		territoryDevBranchCmd(),
 	)
 
 	return cmd
@@ -225,6 +226,12 @@ func territoryStatusCmd() *cobra.Command {
 			fmt.Printf("Path:        %s\n", result["path"])
 			fmt.Printf("Repo Root:   %s\n", result["repo_root"])
 			fmt.Printf("Base Branch: %s\n", result["base_branch"])
+			if devBranch, ok := result["dev_branch"].(string); ok && devBranch != "" {
+				fmt.Printf("Dev Branch:  %s\n", devBranch)
+			}
+			if mergeTarget, ok := result["merge_target_branch"].(string); ok && mergeTarget != "" {
+				fmt.Printf("Merge Target: %s\n", mergeTarget)
+			}
 
 			return nil
 		},
@@ -313,6 +320,67 @@ func territoryAddCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+func territoryDevBranchCmd() *cobra.Command {
+	var clear bool
+
+	cmd := &cobra.Command{
+		Use:   "dev-branch [branch]",
+		Short: "Configure the development/staging branch for worker merges",
+		Long: `Configure the development/staging branch where workers merge their completed work.
+
+If a dev branch is set, workers will merge their worktree branches into this branch
+instead of the main branch (master/main). This is useful for:
+- Staging changes before merging to main
+- Running CI/CD on a dev branch before production
+- Isolating in-progress work from the main branch
+
+Use --clear to remove the dev branch configuration and merge directly to main.`,
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client, err := daemon.Connect(cfg.SocketPath)
+			if err != nil {
+				return fmt.Errorf("daemon not running")
+			}
+			defer client.Close()
+
+			branch := ""
+			if len(args) > 0 {
+				branch = args[0]
+			}
+			if clear {
+				branch = ""
+			}
+
+			resp, err := client.Call(protocol.MethodTerritorySetDevBranch, protocol.TerritorySetDevBranchParams{
+				Branch: branch,
+			})
+			if err != nil {
+				return err
+			}
+
+			if resp.Error != nil {
+				return fmt.Errorf("%s", resp.Error.Message)
+			}
+
+			var result protocol.TerritorySetDevBranchResult
+			json.Unmarshal(resp.Result, &result)
+
+			if result.DevBranch == "" {
+				fmt.Printf("Dev branch cleared. Workers will merge to: %s\n", result.MergeTargetBranch)
+			} else {
+				fmt.Printf("Dev branch set to: %s\n", result.DevBranch)
+				fmt.Printf("Workers will merge to: %s\n", result.MergeTargetBranch)
+			}
+
+			return nil
+		},
+	}
+
+	cmd.Flags().BoolVar(&clear, "clear", false, "Clear the dev branch configuration")
+
+	return cmd
 }
 
 // Worker commands

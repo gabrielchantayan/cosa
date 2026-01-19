@@ -164,10 +164,11 @@ const (
 	MethodShutdown = "shutdown"
 
 	// Territory management
-	MethodTerritoryInit   = "territory.init"
-	MethodTerritoryStatus = "territory.status"
-	MethodTerritoryList   = "territory.list"
-	MethodTerritoryAdd    = "territory.add"
+	MethodTerritoryInit         = "territory.init"
+	MethodTerritoryStatus       = "territory.status"
+	MethodTerritoryList         = "territory.list"
+	MethodTerritoryAdd          = "territory.add"
+	MethodTerritorySetDevBranch = "territory.setDevBranch"
 
 	// Worker management
 	MethodWorkerAdd     = "worker.add"
@@ -229,6 +230,17 @@ type StatusResult struct {
 	Territory  string `json:"territory,omitempty"`
 	TotalCost  string `json:"total_cost,omitempty"`   // Cumulative cost
 	TotalTokens int   `json:"total_tokens,omitempty"` // Cumulative tokens
+}
+
+// TerritorySetDevBranchParams are parameters for territory.setDevBranch.
+type TerritorySetDevBranchParams struct {
+	Branch string `json:"branch"` // Empty string clears the dev branch
+}
+
+// TerritorySetDevBranchResult is the result of territory.setDevBranch.
+type TerritorySetDevBranchResult struct {
+	DevBranch         string `json:"dev_branch"`          // Current dev branch (empty if cleared)
+	MergeTargetBranch string `json:"merge_target_branch"` // Effective merge target (dev or base)
 }
 
 // WorkerAddParams are parameters for worker.add.
