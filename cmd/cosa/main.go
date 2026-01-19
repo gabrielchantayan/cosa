@@ -103,8 +103,9 @@ func stopCmd() *cobra.Command {
 
 func statusCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "status",
-		Short: "Show daemon status",
+		Use:     "status",
+		Short:   "Show daemon status",
+		Aliases: []string{"s"},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client, err := daemon.Connect(cfg.SocketPath)
 			if err != nil {
@@ -605,8 +606,9 @@ func workerDetailCmd() *cobra.Command {
 
 func jobCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "job",
-		Short: "Manage jobs",
+		Use:     "job",
+		Short:   "Manage jobs",
+		Aliases: []string{"j", "jobs"},
 	}
 
 	cmd.AddCommand(
@@ -1069,8 +1071,9 @@ func operationCancelCmd() *cobra.Command {
 
 func orderCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "order",
-		Short: "Manage standing orders for workers",
+		Use:     "order",
+		Short:   "Manage standing orders for workers",
+		Aliases: []string{"orders"},
 	}
 
 	cmd.AddCommand(
