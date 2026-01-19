@@ -224,20 +224,35 @@ func (a *App) handleEvent(event ledger.Event) {
 		json.Unmarshal(event.Data, &data)
 		message = fmt.Sprintf("Job created: %s", truncate(data.Description, 30))
 
+	case ledger.EventJobQueued:
+		var data ledger.JobEventData
+		json.Unmarshal(event.Data, &data)
+		worker = data.WorkerName
+		message = fmt.Sprintf("Picked up job: %s", truncate(data.Description, 30))
+
 	case ledger.EventJobStarted:
 		var data ledger.JobEventData
 		json.Unmarshal(event.Data, &data)
-		message = fmt.Sprintf("Job started: %s", truncate(data.Description, 30))
+		worker = data.WorkerName
+		message = fmt.Sprintf("Started job: %s", truncate(data.Description, 30))
 
 	case ledger.EventJobCompleted:
 		var data ledger.JobEventData
 		json.Unmarshal(event.Data, &data)
-		message = fmt.Sprintf("Job completed: %s", truncate(data.Description, 30))
+		worker = data.WorkerName
+		message = fmt.Sprintf("Completed job: %s", truncate(data.Description, 30))
 
 	case ledger.EventJobFailed:
 		var data ledger.JobEventData
 		json.Unmarshal(event.Data, &data)
+		worker = data.WorkerName
 		message = fmt.Sprintf("Job failed: %s", data.Error)
+
+	case ledger.EventJobCancelled:
+		var data ledger.JobEventData
+		json.Unmarshal(event.Data, &data)
+		worker = data.WorkerName
+		message = fmt.Sprintf("Job cancelled: %s", truncate(data.Description, 30))
 
 	default:
 		message = string(event.Type)

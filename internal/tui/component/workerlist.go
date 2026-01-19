@@ -124,8 +124,20 @@ func (w *WorkerList) renderWorkerLine(worker protocol.WorkerInfo, selected bool)
 		name = name[:12]
 	}
 
-	// Build line
+	// Build main line
 	content := fmt.Sprintf("%s %s %-12s", status, role, name)
+
+	// Add current job description if working
+	if worker.CurrentJobDesc != "" {
+		// Truncate job description to fit
+		maxJobLen := w.width - 8 // Leave room for indent and padding
+		jobDesc := worker.CurrentJobDesc
+		if len(jobDesc) > maxJobLen {
+			jobDesc = jobDesc[:maxJobLen-2] + ".."
+		}
+		jobLine := w.styles.TextMuted.Render("  └─ " + jobDesc)
+		content = content + "\n" + jobLine
+	}
 
 	// Apply selection style
 	lineWidth := w.width - 2
