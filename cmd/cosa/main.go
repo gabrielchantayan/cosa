@@ -322,8 +322,9 @@ func territoryAddCmd() *cobra.Command {
 
 func workerCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "worker",
-		Short: "Manage workers",
+		Use:     "worker",
+		Short:   "Manage workers",
+		Aliases: []string{"w"},
 	}
 
 	cmd.AddCommand(
