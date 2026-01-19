@@ -470,7 +470,7 @@ func (d *Dashboard) ShowNewJobDialog() {
 	d.newJobDialog.SetInput("Job Description:")
 	d.newJobDialog.AddButton("Create", "create", true)
 	d.newJobDialog.AddButton("Cancel", "cancel", false)
-	d.newJobDialog.SetSize(50, 10)
+	d.newJobDialog.SetSize(70, 12)
 	d.newJobDialog.Show()
 }
 
