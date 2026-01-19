@@ -393,8 +393,9 @@ Use --clear to remove the dev branch configuration and merge directly to main.`,
 
 func workerCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "worker",
-		Short: "Manage workers",
+		Use:     "worker",
+		Short:   "Manage workers",
+		Aliases: []string{"w"},
 	}
 
 	cmd.AddCommand(
