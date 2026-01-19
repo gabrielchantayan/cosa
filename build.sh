@@ -2,6 +2,9 @@
 
 echo "Building cosa"
 
+echo "Stopping cosa"
+cosa stop
+
 echo "Cleaning up old binaries"
 
 rm -rf bin/
