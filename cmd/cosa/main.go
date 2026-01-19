@@ -2,10 +2,12 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -47,6 +49,7 @@ role system and real-time TUI.`,
 		orderCmd(),
 		logsCmd(),
 		tuiCmd(),
+		chatCmd(),
 	)
 
 	if err := rootCmd.Execute(); err != nil {
@@ -1543,4 +1546,92 @@ func formatDuration(d time.Duration) string {
 		return fmt.Sprintf("%dm%ds", m, s)
 	}
 	return fmt.Sprintf("%ds", s)
+}
+
+// Chat command
+
+func chatCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "chat",
+		Short: "Chat with the underboss",
+		Long: `Start an interactive chat session with the underboss (Claude).
+This allows you to have a back-and-forth conversation to discuss work,
+get advice, or coordinate tasks.
+
+Type 'exit' or 'quit' to end the chat session.
+Press Ctrl+C to abort.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client, err := daemon.Connect(cfg.SocketPath)
+			if err != nil {
+				return fmt.Errorf("daemon not running - start it with 'cosa start'")
+			}
+			defer client.Close()
+
+			// Start chat session
+			resp, err := client.Call(protocol.MethodChatStart, protocol.ChatStartParams{})
+			if err != nil {
+				return fmt.Errorf("failed to start chat: %w", err)
+			}
+			if resp.Error != nil {
+				return fmt.Errorf("failed to start chat: %s", resp.Error.Message)
+			}
+
+			var startResult protocol.ChatStartResult
+			json.Unmarshal(resp.Result, &startResult)
+
+			fmt.Println("Chat session started. Type 'exit' or 'quit' to end.")
+			fmt.Println("----------------------------------------")
+			fmt.Println()
+			if startResult.Greeting != "" {
+				fmt.Printf("Underboss: %s\n", startResult.Greeting)
+				fmt.Println()
+			}
+
+			// Read input loop
+			scanner := bufio.NewScanner(os.Stdin)
+			for {
+				fmt.Print("You: ")
+				if !scanner.Scan() {
+					break
+				}
+
+				input := strings.TrimSpace(scanner.Text())
+				if input == "" {
+					continue
+				}
+
+				// Check for exit commands
+				if input == "exit" || input == "quit" || input == "/exit" || input == "/quit" {
+					break
+				}
+
+				// Send message
+				resp, err := client.Call(protocol.MethodChatSend, protocol.ChatSendParams{
+					Message: input,
+				})
+				if err != nil {
+					fmt.Printf("Error: %v\n", err)
+					continue
+				}
+				if resp.Error != nil {
+					fmt.Printf("Error: %s\n", resp.Error.Message)
+					continue
+				}
+
+				var sendResult protocol.ChatSendResult
+				json.Unmarshal(resp.Result, &sendResult)
+
+				fmt.Println()
+				fmt.Printf("Underboss: %s\n", sendResult.Response)
+				fmt.Println()
+			}
+
+			// End chat session
+			client.Call(protocol.MethodChatEnd, nil)
+			fmt.Println()
+			fmt.Println("Chat session ended.")
+
+			return nil
+		},
+	}
 }
