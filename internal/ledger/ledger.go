@@ -51,6 +51,8 @@ const (
 	EventReviewStarted  EventType = "review.started"
 	EventReviewApproved EventType = "review.approved"
 	EventReviewRejected EventType = "review.rejected"
+	EventReviewFailed   EventType = "review.failed"
+	EventReviewPhase    EventType = "review.phase"
 
 	// Gate events
 	EventGateStarted EventType = "gate.started"
@@ -267,10 +269,15 @@ type ReviewEventData struct {
 	JobID         string `json:"job_id"`
 	WorkerID      string `json:"worker_id"`
 	WorkerName    string `json:"worker_name,omitempty"`
+	WorktreePath  string `json:"worktree_path,omitempty"`
+	Phase         string `json:"phase,omitempty"`
 	Summary       string `json:"summary,omitempty"`
 	Feedback      string `json:"feedback,omitempty"`
 	RevisionJobID string `json:"revision_job_id,omitempty"`
 	Error         string `json:"error,omitempty"`
+	ErrorDetail   string `json:"error_detail,omitempty"`
+	FilesChanged  int    `json:"files_changed,omitempty"`
+	Decision      string `json:"decision,omitempty"`
 }
 
 // GateEventData contains data for gate events.
