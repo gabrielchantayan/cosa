@@ -49,6 +49,10 @@ type Config struct {
 
 	// BuildCommand to run before review.
 	BuildCommand string `json:"build_command,omitempty"`
+
+	// DevBranch is the development/staging branch where workers merge their work.
+	// If empty, workers merge directly to BaseBranch (main/master).
+	DevBranch string `json:"dev_branch,omitempty"`
 }
 
 // Init initializes a new territory in the given directory.
@@ -158,6 +162,28 @@ func (t *Territory) CreateWorkerWorktree(workerName string) (*git.Worktree, erro
 // RemoveWorkerWorktree removes a worker's worktree.
 func (t *Territory) RemoveWorkerWorktree(workerName string, force bool) error {
 	return t.gitManager.RemoveWorktree(workerName, force)
+}
+
+// MergeTargetBranch returns the branch where workers should merge their work.
+// Returns DevBranch if configured, otherwise BaseBranch.
+func (t *Territory) MergeTargetBranch() string {
+	if t.Config.DevBranch != "" {
+		return t.Config.DevBranch
+	}
+	return t.BaseBranch
+}
+
+// SetDevBranch sets the development/staging branch for worker merges.
+func (t *Territory) SetDevBranch(branch string) error {
+	t.Config.DevBranch = branch
+	return t.Save()
+}
+
+// ClearDevBranch removes the development branch configuration,
+// causing workers to merge directly to the base branch.
+func (t *Territory) ClearDevBranch() error {
+	t.Config.DevBranch = ""
+	return t.Save()
 }
 
 // Exists checks if a territory exists at the given path.

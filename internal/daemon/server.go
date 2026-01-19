@@ -297,6 +297,8 @@ func (s *Server) handleRequest(req *protocol.Request, conn net.Conn) *protocol.R
 		return s.handleTerritoryList(req)
 	case protocol.MethodTerritoryAdd:
 		return s.handleTerritoryAdd(req)
+	case protocol.MethodTerritorySetDevBranch:
+		return s.handleTerritorySetDevBranch(req)
 	case protocol.MethodWorkerAdd:
 		return s.handleWorkerAdd(req)
 	case protocol.MethodWorkerList:
@@ -606,7 +608,7 @@ func (s *Server) initReviewCoordinator() {
 			TestCommand:  s.territory.Config.TestCommand,
 			BuildCommand: s.territory.Config.BuildCommand,
 		},
-		BaseBranch: s.territory.BaseBranch,
+		BaseBranch: s.territory.MergeTargetBranch(),
 	})
 }
 
