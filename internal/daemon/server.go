@@ -93,10 +93,21 @@ func New(cfg *config.Config) (*Server, error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	// Create job store and queue
-	jobs := job.NewStore()
+	// Create persistent job store
+	jobsPath := filepath.Join(cfg.DataDir, "jobs")
+	jobs, err := job.NewPersistentStore(jobsPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create job store: %w", err)
+	}
+
+	// Create persistent worker pool
+	workersPath := filepath.Join(cfg.DataDir, "workers")
+	pool, err := worker.NewPersistentPool(workersPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create worker pool: %w", err)
+	}
+
 	queue := job.NewQueue(jobs)
-	pool := worker.NewPool()
 	operations := job.NewOperationStore()
 
 	return &Server{
@@ -142,6 +153,12 @@ func (s *Server) Start() error {
 			s.loadExistingTerritory(wd)
 		}
 	}
+
+	// Restore workers from persistence
+	s.restoreWorkers()
+
+	// Re-queue pending/queued jobs
+	s.requeueJobs()
 
 	// Start the scheduler
 	s.startScheduler()
@@ -534,6 +551,7 @@ func (sched *scheduler) processQueue() {
 		// Remove from queue and mark as queued
 		sched.queue.Remove(j.ID)
 		j.Queue()
+		sched.jobs.Save(j) // Persist queued state
 
 		sched.ledger.Append(ledger.EventJobQueued, ledger.JobEventData{
 			ID:     j.ID,
@@ -559,6 +577,7 @@ func (sched *scheduler) processQueue() {
 // onJobComplete is called when a job completes successfully.
 func (s *Server) onJobComplete(j *job.Job) {
 	s.queue.NotifyCompletion(j.ID)
+	s.jobs.Save(j) // Persist final state
 	s.ledger.Append(ledger.EventJobCompleted, ledger.JobEventData{
 		ID: j.ID,
 	})
@@ -580,6 +599,7 @@ func (s *Server) onJobComplete(j *job.Job) {
 // onJobFail is called when a job fails.
 func (s *Server) onJobFail(j *job.Job, err error) {
 	s.queue.NotifyFailure(j.ID)
+	s.jobs.Save(j) // Persist final state
 	s.ledger.Append(ledger.EventJobFailed, ledger.JobEventData{
 		ID:    j.ID,
 		Error: err.Error(),
@@ -608,6 +628,82 @@ func (s *Server) initReviewCoordinator() {
 		},
 		BaseBranch: s.territory.BaseBranch,
 	})
+}
+
+// restoreWorkers reinitializes workers loaded from persistence.
+func (s *Server) restoreWorkers() {
+	pending := s.pool.PendingWorkers()
+	if len(pending) == 0 {
+		return
+	}
+
+	s.mu.RLock()
+	t := s.territory
+	s.mu.RUnlock()
+
+	for _, info := range pending {
+		// Verify worktree still exists
+		if _, err := os.Stat(info.Worktree); os.IsNotExist(err) {
+			continue // Skip workers with missing worktrees
+		}
+
+		// Create worktree reference
+		var wt *git.Worktree
+		if t != nil {
+			wt = &git.Worktree{
+				Path:   info.Worktree,
+				Branch: info.Branch,
+			}
+		}
+
+		// Create worker with completion callbacks
+		w := worker.New(worker.Config{
+			Name:     info.Name,
+			Role:     info.Role,
+			Worktree: wt,
+			ClaudeConfig: claude.ClientConfig{
+				Binary:   s.cfg.Claude.Binary,
+				Model:    s.cfg.Claude.Model,
+				MaxTurns: s.cfg.Claude.MaxTurns,
+			},
+			OnEvent: func(e worker.Event) {
+				s.ledger.Append(ledger.EventType("worker."+e.Type), e)
+			},
+			OnJobComplete: s.onJobComplete,
+			OnJobFail:     s.onJobFail,
+		})
+
+		// Restore persisted state
+		w.ID = info.ID
+		w.SessionID = info.SessionID
+		w.StandingOrders = info.StandingOrders
+		w.JobsCompleted = info.JobsCompleted
+		w.JobsFailed = info.JobsFailed
+
+		// Add to pool and start
+		if err := s.pool.Add(w); err != nil {
+			continue // Skip if already exists or other error
+		}
+		w.Start()
+	}
+
+	s.pool.ClearPending()
+}
+
+// requeueJobs re-queues jobs that were pending or queued when daemon stopped.
+func (s *Server) requeueJobs() {
+	for _, j := range s.jobs.List() {
+		status := j.GetStatus()
+		switch status {
+		case job.StatusPending, job.StatusQueued:
+			// Re-queue for execution
+			s.queue.Enqueue(j)
+		case job.StatusRunning:
+			// Job was interrupted - mark as failed and re-queue
+			j.Fail("daemon restarted during execution")
+			s.jobs.Save(j)
+		}
+	}
 }
 
 // startLookout initializes and starts the health monitor.

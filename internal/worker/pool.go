@@ -1,26 +1,80 @@
 package worker
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 
 	"cosa/internal/job"
 )
 
-// Pool manages a collection of workers with availability tracking.
-type Pool struct {
-	workers map[string]*Worker    // Keyed by name
-	byRole  map[Role][]*Worker    // Indexed by role
-	mu      sync.RWMutex
-	onIdle  func(*Worker)         // Callback when worker becomes idle
+// WorkerInfo contains the persistent worker metadata.
+type WorkerInfo struct {
+	ID             string   `json:"id"`
+	Name           string   `json:"name"`
+	Role           Role     `json:"role"`
+	Worktree       string   `json:"worktree"`
+	Branch         string   `json:"branch"`
+	StandingOrders []string `json:"standing_orders,omitempty"`
+	SessionID      string   `json:"session_id,omitempty"`
+	JobsCompleted  int      `json:"jobs_completed"`
+	JobsFailed     int      `json:"jobs_failed"`
 }
 
-// NewPool creates a new worker pool.
+// Pool manages a collection of workers with availability tracking.
+type Pool struct {
+	workers map[string]*Worker // Keyed by name
+	byRole  map[Role][]*Worker // Indexed by role
+	path    string             // Directory for worker persistence (empty = no persistence)
+	pending []WorkerInfo       // Workers loaded from disk, awaiting full initialization
+	mu      sync.RWMutex
+	onIdle  func(*Worker) // Callback when worker becomes idle
+}
+
+// NewPool creates a new in-memory worker pool (no persistence).
 func NewPool() *Pool {
 	return &Pool{
 		workers: make(map[string]*Worker),
 		byRole:  make(map[Role][]*Worker),
 	}
+}
+
+// NewPersistentPool creates a worker pool with disk persistence.
+// Note: Workers are loaded as metadata only; call InitializeWorker to fully initialize each.
+func NewPersistentPool(path string) (*Pool, error) {
+	if err := os.MkdirAll(path, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create workers directory: %w", err)
+	}
+
+	p := &Pool{
+		workers: make(map[string]*Worker),
+		byRole:  make(map[Role][]*Worker),
+		path:    path,
+	}
+
+	if err := p.loadAll(); err != nil {
+		return nil, fmt.Errorf("failed to load workers: %w", err)
+	}
+
+	return p, nil
+}
+
+// PendingWorkers returns workers loaded from disk that need initialization.
+func (p *Pool) PendingWorkers() []WorkerInfo {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	result := make([]WorkerInfo, len(p.pending))
+	copy(result, p.pending)
+	return result
+}
+
+// ClearPending clears the pending workers list after initialization.
+func (p *Pool) ClearPending() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.pending = nil
 }
 
 // Add adds a worker to the pool.
@@ -34,6 +88,10 @@ func (p *Pool) Add(w *Worker) error {
 
 	p.workers[w.Name] = w
 	p.byRole[w.Role] = append(p.byRole[w.Role], w)
+
+	if p.path != "" {
+		p.saveWorker(w)
+	}
 
 	return nil
 }
@@ -57,6 +115,10 @@ func (p *Pool) Remove(name string) (*Worker, error) {
 			p.byRole[w.Role] = append(workers[:i], workers[i+1:]...)
 			break
 		}
+	}
+
+	if p.path != "" {
+		os.Remove(p.workerFilePath(name))
 	}
 
 	return w, nil
@@ -221,4 +283,71 @@ func (p *Pool) StopAll() {
 	for _, w := range workers {
 		w.Stop()
 	}
+}
+
+// Save persists a worker to disk (if persistence is enabled).
+func (p *Pool) Save(w *Worker) error {
+	if p.path == "" {
+		return nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.saveWorker(w)
+}
+
+// Persistence helpers
+
+func (p *Pool) workerFilePath(name string) string {
+	return filepath.Join(p.path, name+".json")
+}
+
+func (p *Pool) saveWorker(w *Worker) error {
+	info := WorkerInfo{
+		ID:             w.ID,
+		Name:           w.Name,
+		Role:           w.Role,
+		Worktree:       w.Worktree,
+		Branch:         w.Branch,
+		StandingOrders: w.StandingOrders,
+		SessionID:      w.SessionID,
+		JobsCompleted:  w.JobsCompleted,
+		JobsFailed:     w.JobsFailed,
+	}
+
+	data, err := json.MarshalIndent(info, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(p.workerFilePath(w.Name), data, 0644)
+}
+
+func (p *Pool) loadAll() error {
+	entries, err := os.ReadDir(p.path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+
+		filePath := filepath.Join(p.path, entry.Name())
+		data, err := os.ReadFile(filePath)
+		if err != nil {
+			continue // Skip unreadable files
+		}
+
+		var info WorkerInfo
+		if err := json.Unmarshal(data, &info); err != nil {
+			continue // Skip unparseable files
+		}
+
+		p.pending = append(p.pending, info)
+	}
+
+	return nil
 }

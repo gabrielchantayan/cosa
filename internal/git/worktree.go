@@ -41,9 +41,21 @@ func (m *Manager) WorktreeBase() string {
 }
 
 // CreateWorktree creates a new worktree for a worker.
+// If the worktree already exists, it returns the existing one.
 func (m *Manager) CreateWorktree(name, baseBranch string) (*Worktree, error) {
 	worktreePath := filepath.Join(m.worktreeBase, name)
 	branchName := fmt.Sprintf("cosa/%s", name)
+
+	// Check if worktree already exists
+	if _, err := os.Stat(worktreePath); err == nil {
+		// Worktree exists, verify it's valid and return it
+		commit, _ := m.getHeadCommit(worktreePath)
+		return &Worktree{
+			Path:   worktreePath,
+			Branch: branchName,
+			Commit: commit,
+		}, nil
+	}
 
 	// Create branch from base
 	if baseBranch == "" {

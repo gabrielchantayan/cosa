@@ -3,6 +3,9 @@ package job
 
 import (
 	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -176,17 +179,36 @@ func (j *Job) ToJSON() ([]byte, error) {
 	return json.Marshal(j)
 }
 
-// Store manages jobs.
+// Store manages jobs with optional persistence.
 type Store struct {
 	jobs map[string]*Job
+	path string // Directory for job persistence (empty = no persistence)
 	mu   sync.RWMutex
 }
 
-// NewStore creates a new job store.
+// NewStore creates a new in-memory job store (no persistence).
 func NewStore() *Store {
 	return &Store{
 		jobs: make(map[string]*Job),
 	}
+}
+
+// NewPersistentStore creates a job store with disk persistence.
+func NewPersistentStore(path string) (*Store, error) {
+	if err := os.MkdirAll(path, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create jobs directory: %w", err)
+	}
+
+	s := &Store{
+		jobs: make(map[string]*Job),
+		path: path,
+	}
+
+	if err := s.loadAll(); err != nil {
+		return nil, fmt.Errorf("failed to load jobs: %w", err)
+	}
+
+	return s, nil
 }
 
 // Add adds a job to the store.
@@ -194,6 +216,9 @@ func (s *Store) Add(job *Job) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.jobs[job.ID] = job
+	if s.path != "" {
+		s.saveJob(job)
+	}
 }
 
 // Get retrieves a job by ID.
@@ -209,6 +234,9 @@ func (s *Store) Remove(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.jobs, id)
+	if s.path != "" {
+		os.Remove(s.jobFilePath(id))
+	}
 }
 
 // List returns all jobs.
@@ -260,4 +288,59 @@ func (s *Store) Count() int {
 // CountByStatus returns the number of jobs with a given status.
 func (s *Store) CountByStatus(status Status) int {
 	return len(s.ListByStatus(status))
+}
+
+// Save persists a job to disk (if persistence is enabled).
+func (s *Store) Save(job *Job) error {
+	if s.path == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.saveJob(job)
+}
+
+// Persistence helpers
+
+func (s *Store) jobFilePath(id string) string {
+	return filepath.Join(s.path, id+".json")
+}
+
+func (s *Store) saveJob(job *Job) error {
+	data, err := job.ToJSON()
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(s.jobFilePath(job.ID), data, 0644)
+}
+
+func (s *Store) loadAll() error {
+	entries, err := os.ReadDir(s.path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+
+		filePath := filepath.Join(s.path, entry.Name())
+		data, err := os.ReadFile(filePath)
+		if err != nil {
+			continue // Skip unreadable files
+		}
+
+		var job Job
+		if err := json.Unmarshal(data, &job); err != nil {
+			continue // Skip unparseable files
+		}
+
+		s.jobs[job.ID] = &job
+	}
+
+	return nil
 }
