@@ -676,7 +676,7 @@ func (s *Server) initReviewCoordinator() {
 			TestCommand:  s.territory.Config.TestCommand,
 			BuildCommand: s.territory.Config.BuildCommand,
 		},
-		BaseBranch: s.territory.MergeTargetBranch(),
+		BaseBranch: s.territory.MergeTargetBranch(s.cfg.Git.DefaultMergeBranch),
 	})
 }
 

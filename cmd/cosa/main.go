@@ -1530,6 +1530,11 @@ func settingsListCmd() *cobra.Command {
 			fmt.Printf("  workers.default_role   = %s\n", cfg.Workers.DefaultRole)
 			fmt.Println()
 
+			// Git settings
+			fmt.Println("Git:")
+			fmt.Printf("  git.default_merge_branch = %s\n", valueOrDefault(cfg.Git.DefaultMergeBranch, "(repository default)"))
+			fmt.Println()
+
 			// TUI settings
 			fmt.Println("TUI:")
 			fmt.Printf("  tui.theme          = %s\n", cfg.TUI.Theme)
@@ -1609,6 +1614,10 @@ func getSettingValue(key string) (string, error) {
 		return strconv.Itoa(cfg.Workers.MaxConcurrent), nil
 	case "workers.default_role":
 		return cfg.Workers.DefaultRole, nil
+
+	// Git
+	case "git.default_merge_branch":
+		return cfg.Git.DefaultMergeBranch, nil
 
 	// TUI
 	case "tui.theme":
@@ -1738,6 +1747,10 @@ func setSettingValue(key, value string) error {
 			return fmt.Errorf("invalid default_role: %s (must be one of: %s)", value, strings.Join(validRoles, ", "))
 		}
 		cfg.Workers.DefaultRole = value
+
+	// Git
+	case "git.default_merge_branch":
+		cfg.Git.DefaultMergeBranch = value
 
 	// TUI
 	case "tui.theme":
