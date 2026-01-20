@@ -70,6 +70,8 @@ func (d *Dialog) SetInput(label string) {
 	d.inputLabel = label
 	d.input = NewInput()
 	d.input.SetWidth(d.width - 8)
+	d.input.SetMultiline(true)
+	d.input.SetHeightLimits(1, 4)
 	d.input.Focus()
 }
 
@@ -268,16 +270,18 @@ func (d *Dialog) View() string {
 
 	t := theme.Current
 
-	// Title bar
+	// Title bar with more prominent styling
 	titleStyle := lipgloss.NewStyle().
 		Foreground(t.Primary).
 		Bold(true).
-		Padding(0, 1)
+		Padding(1, 2).
+		MarginBottom(1)
 
 	// Content
 	contentStyle := lipgloss.NewStyle().
 		Foreground(t.Text).
-		Padding(1, 2)
+		Padding(0, 2).
+		MarginBottom(1)
 
 	// Build content sections
 	var sections []string
@@ -306,10 +310,13 @@ func (d *Dialog) View() string {
 	if d.hasInput && d.input != nil {
 		labelStyle := lipgloss.NewStyle().
 			Foreground(t.TextMuted).
+			Padding(0, 2).
+			MarginBottom(0)
+		inputWrapper := lipgloss.NewStyle().
 			Padding(0, 2)
 		inputSection := lipgloss.JoinVertical(lipgloss.Left,
 			labelStyle.Render(d.inputLabel),
-			"  "+d.input.View(),
+			inputWrapper.Render(d.input.View()),
 		)
 		sections = append(sections, inputSection)
 	}
@@ -325,28 +332,28 @@ func (d *Dialog) View() string {
 						Background(t.Primary).
 						Foreground(t.Background).
 						Bold(true).
-						Padding(0, 2)
+						Padding(0, 3)
 				} else {
 					style = lipgloss.NewStyle().
 						Background(t.Surface).
 						Foreground(t.Primary).
 						Bold(true).
-						Padding(0, 2)
+						Padding(0, 3)
 				}
 			} else {
 				if btn.Primary {
 					style = lipgloss.NewStyle().
 						Foreground(t.Primary).
-						Padding(0, 2)
+						Padding(0, 3)
 				} else {
 					style = lipgloss.NewStyle().
 						Foreground(t.TextMuted).
-						Padding(0, 2)
+						Padding(0, 3)
 				}
 			}
 			btnViews = append(btnViews, style.Render(btn.Label))
 		}
-		buttonRow := strings.Join(btnViews, "  ")
+		buttonRow := strings.Join(btnViews, "   ")
 		sections = append(sections, lipgloss.NewStyle().Padding(1, 2).Render(buttonRow))
 	}
 
@@ -357,8 +364,7 @@ func (d *Dialog) View() string {
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(t.BorderActive).
 		Background(t.Background).
-		Width(d.width).
-		Height(d.height)
+		Width(d.width)
 
 	return dialogStyle.Render(content)
 }

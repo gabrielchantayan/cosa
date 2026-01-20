@@ -65,9 +65,11 @@ func (s *Server) handleTerritoryStatus(req *protocol.Request) *protocol.Response
 	}
 
 	resp, _ := protocol.NewResponse(req.ID, map[string]interface{}{
-		"path":        t.Path,
-		"repo_root":   t.RepoRoot,
-		"base_branch": t.BaseBranch,
+		"path":                t.Path,
+		"repo_root":           t.RepoRoot,
+		"base_branch":         t.BaseBranch,
+		"dev_branch":          t.Config.DevBranch,
+		"merge_target_branch": t.MergeTargetBranch(),
 	})
 	return resp
 }
@@ -127,6 +129,44 @@ func (s *Server) handleTerritoryList(req *protocol.Request) *protocol.Response {
 
 	resp, _ := protocol.NewResponse(req.ID, map[string]interface{}{
 		"territories": territories,
+	})
+	return resp
+}
+
+func (s *Server) handleTerritorySetDevBranch(req *protocol.Request) *protocol.Response {
+	var params protocol.TerritorySetDevBranchParams
+	if req.Params != nil {
+		json.Unmarshal(req.Params, &params)
+	}
+
+	s.mu.Lock()
+	t := s.territory
+	s.mu.Unlock()
+
+	if t == nil {
+		resp, _ := protocol.NewErrorResponse(req.ID, protocol.ErrInvalidState, "territory not initialized", nil)
+		return resp
+	}
+
+	// Set or clear the dev branch
+	var err error
+	if params.Branch == "" {
+		err = t.ClearDevBranch()
+	} else {
+		err = t.SetDevBranch(params.Branch)
+	}
+
+	if err != nil {
+		resp, _ := protocol.NewErrorResponse(req.ID, protocol.InternalError, err.Error(), nil)
+		return resp
+	}
+
+	// Reinitialize the review coordinator with the new merge target
+	s.initReviewCoordinator()
+
+	resp, _ := protocol.NewResponse(req.ID, protocol.TerritorySetDevBranchResult{
+		DevBranch:         t.Config.DevBranch,
+		MergeTargetBranch: t.MergeTargetBranch(),
 	})
 	return resp
 }
@@ -191,8 +231,9 @@ func (s *Server) handleWorkerAdd(req *protocol.Request) *protocol.Response {
 		OnEvent: func(e worker.Event) {
 			s.ledger.Append(ledger.EventType("worker."+e.Type), e)
 		},
-		OnJobComplete: s.onJobComplete,
-		OnJobFail:     s.onJobFail,
+		OnJobComplete:     s.onJobComplete,
+		OnJobFail:         s.onJobFail,
+		MergeTargetBranch: t.MergeTargetBranch(),
 	})
 
 	// Restore session ID if available
@@ -240,6 +281,7 @@ func (s *Server) handleWorkerList(req *protocol.Request) *protocol.Response {
 		}
 		if j := w.GetCurrentJob(); j != nil {
 			info.CurrentJob = j.ID
+			info.CurrentJobDesc = j.Description
 		}
 		workers = append(workers, info)
 	}
@@ -337,20 +379,28 @@ func (s *Server) handleJobAdd(req *protocol.Request) *protocol.Response {
 
 		if exists && w.GetStatus() == worker.StatusIdle {
 			j.Queue()
+			s.jobs.Save(j) // Persist queued state
 			s.ledger.Append(ledger.EventJobQueued, ledger.JobEventData{
-				ID:     j.ID,
-				Worker: w.ID,
+				ID:          j.ID,
+				Description: j.Description,
+				Worker:      w.ID,
+				WorkerName:  w.Name,
 			})
 
 			go func() {
 				s.ledger.Append(ledger.EventJobStarted, ledger.JobEventData{
-					ID:     j.ID,
-					Worker: w.ID,
+					ID:          j.ID,
+					Description: j.Description,
+					Worker:      w.ID,
+					WorkerName:  w.Name,
 				})
 				if err := w.Execute(j); err != nil {
 					s.ledger.Append(ledger.EventJobFailed, ledger.JobEventData{
-						ID:    j.ID,
-						Error: err.Error(),
+						ID:          j.ID,
+						Description: j.Description,
+						Worker:      w.ID,
+						WorkerName:  w.Name,
+						Error:       err.Error(),
 					})
 				}
 			}()
@@ -460,19 +510,26 @@ func (s *Server) handleJobAssign(req *protocol.Request) *protocol.Response {
 	j.Queue()
 
 	s.ledger.Append(ledger.EventJobQueued, ledger.JobEventData{
-		ID:     j.ID,
-		Worker: w.ID,
+		ID:          j.ID,
+		Description: j.Description,
+		Worker:      w.ID,
+		WorkerName:  w.Name,
 	})
 
 	go func() {
 		s.ledger.Append(ledger.EventJobStarted, ledger.JobEventData{
-			ID:     j.ID,
-			Worker: w.ID,
+			ID:          j.ID,
+			Description: j.Description,
+			Worker:      w.ID,
+			WorkerName:  w.Name,
 		})
 		if err := w.Execute(j); err != nil {
 			s.ledger.Append(ledger.EventJobFailed, ledger.JobEventData{
-				ID:    j.ID,
-				Error: err.Error(),
+				ID:          j.ID,
+				Description: j.Description,
+				Worker:      w.ID,
+				WorkerName:  w.Name,
+				Error:       err.Error(),
 			})
 		}
 	}()

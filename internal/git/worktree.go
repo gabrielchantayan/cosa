@@ -41,9 +41,21 @@ func (m *Manager) WorktreeBase() string {
 }
 
 // CreateWorktree creates a new worktree for a worker.
+// If the worktree already exists, it returns the existing one.
 func (m *Manager) CreateWorktree(name, baseBranch string) (*Worktree, error) {
 	worktreePath := filepath.Join(m.worktreeBase, name)
 	branchName := fmt.Sprintf("cosa/%s", name)
+
+	// Check if worktree already exists
+	if _, err := os.Stat(worktreePath); err == nil {
+		// Worktree exists, verify it's valid and return it
+		commit, _ := m.getHeadCommit(worktreePath)
+		return &Worktree{
+			Path:   worktreePath,
+			Branch: branchName,
+			Commit: commit,
+		}, nil
+	}
 
 	// Create branch from base
 	if baseBranch == "" {
@@ -180,15 +192,22 @@ func (m *Manager) GetCurrentBranch() (string, error) {
 
 // GetDefaultBranch attempts to determine the default branch (main/master).
 func (m *Manager) GetDefaultBranch() string {
-	// Try main first
+	// Try common default branch names first
 	if m.branchExists("main") {
 		return "main"
 	}
 	if m.branchExists("master") {
 		return "master"
 	}
-	// Fall back to HEAD
-	return "HEAD"
+
+	// Try to get the current branch name (works if we're on a named branch)
+	if branch, err := m.GetCurrentBranch(); err == nil && branch != "HEAD" && branch != "" {
+		return branch
+	}
+
+	// Last resort: return "master" as the conventional default
+	// This is better than "HEAD" which doesn't work for diffs
+	return "master"
 }
 
 func (m *Manager) branchExists(name string) bool {
@@ -218,6 +237,8 @@ func IsGitRepo(path string) bool {
 }
 
 // FindRepoRoot finds the root of the git repository.
+// Note: If called from a worktree, this returns the worktree path, not the main repo.
+// Use FindMainRepoRoot if you need the main repository root.
 func FindRepoRoot(path string) (string, error) {
 	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
 	cmd.Dir = path
@@ -226,4 +247,29 @@ func FindRepoRoot(path string) (string, error) {
 		return "", fmt.Errorf("not a git repository: %w", err)
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// FindMainRepoRoot finds the root of the main git repository, even when called from a worktree.
+// This is useful for finding shared resources like .cosa directory.
+func FindMainRepoRoot(path string) (string, error) {
+	// Get the common git directory (shared between main repo and worktrees)
+	cmd := exec.Command("git", "rev-parse", "--git-common-dir")
+	cmd.Dir = path
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("not a git repository: %w", err)
+	}
+
+	gitCommonDir := strings.TrimSpace(string(out))
+
+	// The common dir is either ".git" (main repo) or an absolute path to main repo's .git
+	// In either case, the repo root is the parent directory
+	if gitCommonDir == ".git" {
+		// We're in the main repo, use standard method
+		return FindRepoRoot(path)
+	}
+
+	// gitCommonDir is absolute path like /path/to/repo/.git
+	// The repo root is its parent
+	return filepath.Dir(gitCommonDir), nil
 }

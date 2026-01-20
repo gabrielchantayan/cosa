@@ -57,6 +57,10 @@ type Worker struct {
 	// Standing orders applied to all jobs for this worker
 	StandingOrders []string `json:"standing_orders,omitempty"`
 
+	// MergeTargetBranch is the branch where this worker's work will be merged.
+	// This could be a dev/staging branch or the main branch.
+	MergeTargetBranch string `json:"merge_target_branch,omitempty"`
+
 	// Current job
 	CurrentJob *job.Job `json:"current_job,omitempty"`
 
@@ -97,13 +101,14 @@ type Event struct {
 
 // Config configures a worker.
 type Config struct {
-	Name          string
-	Role          Role
-	Worktree      *git.Worktree
-	ClaudeConfig  claude.ClientConfig
-	OnEvent       func(Event)
-	OnJobComplete func(*job.Job)
-	OnJobFail     func(*job.Job, error)
+	Name              string
+	Role              Role
+	Worktree          *git.Worktree
+	ClaudeConfig      claude.ClientConfig
+	OnEvent           func(Event)
+	OnJobComplete     func(*job.Job)
+	OnJobFail         func(*job.Job, error)
+	MergeTargetBranch string // Branch where work will be merged (dev branch or main)
 }
 
 // New creates a new worker.
@@ -115,17 +120,18 @@ func New(cfg Config) *Worker {
 	}
 
 	w := &Worker{
-		ID:            uuid.New().String(),
-		Name:          cfg.Name,
-		Role:          cfg.Role,
-		Status:        StatusIdle,
-		CreatedAt:     time.Now(),
-		ctx:           ctx,
-		cancel:        cancel,
-		events:        make(chan Event, 100),
-		onEvent:       cfg.OnEvent,
-		onJobComplete: cfg.OnJobComplete,
-		onJobFail:     cfg.OnJobFail,
+		ID:                uuid.New().String(),
+		Name:              cfg.Name,
+		Role:              cfg.Role,
+		Status:            StatusIdle,
+		CreatedAt:         time.Now(),
+		MergeTargetBranch: cfg.MergeTargetBranch,
+		ctx:               ctx,
+		cancel:            cancel,
+		events:            make(chan Event, 100),
+		onEvent:           cfg.OnEvent,
+		onJobComplete:     cfg.OnJobComplete,
+		onJobFail:         cfg.OnJobFail,
 	}
 
 	if cfg.Worktree != nil {
@@ -222,9 +228,18 @@ func (w *Worker) processClaudeEvents(j *job.Job) {
 		case event, ok := <-w.client.Events():
 			if !ok {
 				// Channel closed, session ended
-				if j.GetStatus() == job.StatusRunning {
+				status := j.GetStatus()
+				if status == job.StatusRunning {
 					// Assume success if no error
 					w.handleJobSuccess(j)
+				} else if status == job.StatusQueued {
+					// Claude exited before sending init event
+					stderr := w.client.StderrOutput()
+					if stderr != "" {
+						w.handleJobFailure(j, fmt.Errorf("claude exited before starting: %s", stderr))
+					} else {
+						w.handleJobFailure(j, fmt.Errorf("claude exited before starting"))
+					}
 				}
 				return
 			}
@@ -232,8 +247,16 @@ func (w *Worker) processClaudeEvents(j *job.Job) {
 			w.handleClaudeEvent(j, event)
 
 		case <-w.client.Done():
-			if j.GetStatus() == job.StatusRunning {
+			status := j.GetStatus()
+			if status == job.StatusRunning {
 				w.handleJobSuccess(j)
+			} else if status == job.StatusQueued {
+				stderr := w.client.StderrOutput()
+				if stderr != "" {
+					w.handleJobFailure(j, fmt.Errorf("claude exited before starting: %s", stderr))
+				} else {
+					w.handleJobFailure(j, fmt.Errorf("claude exited before starting"))
+				}
 			}
 			return
 		}
@@ -336,7 +359,11 @@ func (w *Worker) buildPrompt(j *job.Job) string {
 	}
 
 	sb.WriteString(fmt.Sprintf("## Your Task\n%s\n\n", j.Description))
-	sb.WriteString("Work in your designated worktree. Make commits as you go.\nWhen finished, summarize what you did.")
+	sb.WriteString("Work in your designated worktree. Make commits as you go.\n")
+	if w.MergeTargetBranch != "" {
+		sb.WriteString(fmt.Sprintf("When finished, your work will be merged into the '%s' branch.\n", w.MergeTargetBranch))
+	}
+	sb.WriteString("When finished, summarize what you did.")
 
 	return sb.String()
 }

@@ -133,9 +133,9 @@ func (t *TextArea) HandleKey(key string) {
 	}
 }
 
-// wrapText wraps text to fit within the given width, respecting word boundaries.
+// wrapTextArea wraps text to fit within the given width, respecting word boundaries.
 // Words longer than the width are broken at the width boundary.
-func wrapText(text string, width int) []string {
+func wrapTextArea(text string, width int) []string {
 	if width <= 0 {
 		return []string{}
 	}
@@ -231,13 +231,13 @@ func (t *TextArea) View() string {
 	var content string
 	if t.value == "" && !t.focused && t.placeholder != "" {
 		// Show placeholder with word wrap
-		wrappedPlaceholder := wrapText(t.placeholder, contentWidth)
+		wrappedPlaceholder := wrapTextArea(t.placeholder, contentWidth)
 		content = lipgloss.NewStyle().
 			Foreground(thm.TextMuted).
 			Render(strings.Join(wrappedPlaceholder, "\n"))
 	} else {
 		// Wrap the text for display
-		wrappedLines := wrapText(t.value, contentWidth)
+		wrappedLines := wrapTextArea(t.value, contentWidth)
 
 		if t.focused {
 			// Find cursor position in wrapped text
@@ -290,7 +290,7 @@ func (t *TextArea) findCursorLine(width int) int {
 
 	// Get text up to cursor
 	textToCursor := t.value[:t.cursor]
-	wrapped := wrapText(textToCursor, width)
+	wrapped := wrapTextArea(textToCursor, width)
 	if len(wrapped) == 0 {
 		return 0
 	}

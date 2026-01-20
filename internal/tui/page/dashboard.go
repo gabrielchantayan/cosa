@@ -38,6 +38,9 @@ type Dashboard struct {
 	// Dialogs
 	newJobDialog *component.Dialog
 	showDialog   bool
+
+	// Callbacks
+	onCreateJob func(description string)
 }
 
 // NewDashboard creates a new dashboard page.
@@ -171,7 +174,7 @@ func (d *Dashboard) View() string {
 	// Footer
 	footer := d.renderFooter()
 
-	// Combine with background
+	// Combine all sections vertically
 	result := lipgloss.JoinVertical(lipgloss.Left, header, content, footer)
 
 	base := lipgloss.NewStyle().
@@ -182,13 +185,41 @@ func (d *Dashboard) View() string {
 
 	// Overlay dialog if visible
 	if d.showDialog && d.newJobDialog != nil && d.newJobDialog.Visible() {
-		dialogView := d.newJobDialog.CenterIn(d.width, d.height)
-		// Simple overlay - in a real app you'd dim the background
-		return lipgloss.Place(d.width, d.height, lipgloss.Center, lipgloss.Center, dialogView,
-			lipgloss.WithWhitespaceBackground(t.Background))
+		return d.renderWithDialogOverlay(base, t)
 	}
 
 	return base
+}
+
+func (d *Dashboard) renderWithDialogOverlay(baseView string, t theme.Theme) string {
+	// Get dialog view centered in the screen
+	dialogView := d.newJobDialog.CenterIn(d.width, d.height)
+
+	// Split base view into lines
+	baseLines := strings.Split(baseView, "\n")
+
+	// Split dialog view into lines
+	dialogLines := strings.Split(dialogView, "\n")
+
+	// Overlay the dialog on top of the base view
+	result := make([]string, d.height)
+	for i := 0; i < d.height && i < len(baseLines); i++ {
+		if i < len(dialogLines) && strings.TrimSpace(dialogLines[i]) != "" {
+			// Use dialog line, but pad to full width
+			dialogLine := dialogLines[i]
+			dialogWidth := lipgloss.Width(dialogLine)
+			if dialogWidth < d.width {
+				dialogLine = dialogLine + strings.Repeat(" ", d.width-dialogWidth)
+			}
+			result[i] = dialogLine
+		} else {
+			result[i] = baseLines[i]
+		}
+	}
+
+	return lipgloss.NewStyle().
+		Background(t.Background).
+		Render(strings.Join(result, "\n"))
 }
 
 func (d *Dashboard) renderHeader() string {
@@ -353,6 +384,11 @@ func (d *Dashboard) IsInputMode() bool {
 	return d.showDialog && d.newJobDialog != nil && d.newJobDialog.Visible()
 }
 
+// SetOnCreateJob sets the callback for when a job is created.
+func (d *Dashboard) SetOnCreateJob(fn func(description string)) {
+	d.onCreateJob = fn
+}
+
 // ShowNewJobDialog shows the new job dialog.
 func (d *Dashboard) ShowNewJobDialog() {
 	d.showDialog = true
@@ -364,6 +400,15 @@ func (d *Dashboard) HandleDialogKey(key string) string {
 	if d.showDialog && d.newJobDialog != nil && d.newJobDialog.Visible() {
 		action := d.newJobDialog.HandleKey(key)
 		if action == "cancel" {
+			d.newJobDialog.Hide()
+			d.showDialog = false
+			return ""
+		}
+		if action == "create" && d.onCreateJob != nil {
+			description := d.newJobDialog.GetInputValue()
+			if description != "" {
+				d.onCreateJob(description)
+			}
 			d.newJobDialog.Hide()
 			d.showDialog = false
 			return ""
