@@ -1767,8 +1767,9 @@ func contains(slice []string, item string) bool {
 
 func tuiCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "tui",
-		Short: "Launch the interactive TUI dashboard",
+		Use:     "tui",
+		Aliases: []string{"t"},
+		Short:   "Launch the interactive TUI dashboard",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Ensure daemon is running
 			if !daemon.IsRunning(cfg.SocketPath) {
