@@ -384,16 +384,8 @@ func (w *WorkerDetail) renderActivitySection(height int) string {
 		Height(height - 2).
 		Render(content)
 
-	// Insert title into border
-	panelLines := strings.Split(panel, "\n")
-	if len(panelLines) > 0 {
-		titleWidth := lipgloss.Width(title)
-		if len(panelLines[0]) > titleWidth+4 {
-			panelLines[0] = panelLines[0][:2] + title + panelLines[0][2+titleWidth:]
-		}
-	}
-
-	return strings.Join(panelLines, "\n")
+	// Insert title into border using shared helper
+	return styles.InsertPanelTitle(panel, title, borderColor)
 }
 
 func (w *WorkerDetail) renderSessionSection(height int) string {
@@ -449,16 +441,8 @@ func (w *WorkerDetail) renderSessionSection(height int) string {
 		Height(height - 2).
 		Render(content)
 
-	// Insert title into border
-	panelLines := strings.Split(panel, "\n")
-	if len(panelLines) > 0 {
-		titleWidth := lipgloss.Width(title)
-		if len(panelLines[0]) > titleWidth+4 {
-			panelLines[0] = panelLines[0][:2] + title + panelLines[0][2+titleWidth:]
-		}
-	}
-
-	return strings.Join(panelLines, "\n")
+	// Insert title into border using shared helper
+	return styles.InsertPanelTitle(panel, title, borderColor)
 }
 
 func (w *WorkerDetail) renderInput() string {

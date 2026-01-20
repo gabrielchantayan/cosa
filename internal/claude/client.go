@@ -6,7 +6,9 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
+	"strings"
 	"sync"
 )
 
@@ -17,23 +19,26 @@ type Client struct {
 	maxTurns  int
 	sessionID string
 	workdir   string
+	mcpConfig string // Path to MCP config file
 
 	cmd    *exec.Cmd
 	stdin  io.WriteCloser
 	stdout io.ReadCloser
 	stderr io.ReadCloser
 
-	mu     sync.Mutex
-	events chan Event
-	done   chan struct{}
+	mu           sync.Mutex
+	events       chan Event
+	done         chan struct{}
+	stderrBuffer []string // Collects stderr for error reporting
 }
 
 // ClientConfig configures a Claude client.
 type ClientConfig struct {
-	Binary   string
-	Model    string
-	MaxTurns int
-	Workdir  string
+	Binary    string
+	Model     string
+	MaxTurns  int
+	Workdir   string
+	MCPConfig string // Path to MCP config file (optional)
 }
 
 // NewClient creates a new Claude Code client.
@@ -46,12 +51,13 @@ func NewClient(cfg ClientConfig) *Client {
 	}
 
 	return &Client{
-		binary:   cfg.Binary,
-		model:    cfg.Model,
-		maxTurns: cfg.MaxTurns,
-		workdir:  cfg.Workdir,
-		events:   make(chan Event, 100),
-		done:     make(chan struct{}),
+		binary:    cfg.Binary,
+		model:     cfg.Model,
+		maxTurns:  cfg.MaxTurns,
+		workdir:   cfg.Workdir,
+		mcpConfig: cfg.MCPConfig,
+		events:    make(chan Event, 100),
+		done:      make(chan struct{}),
 	}
 }
 
@@ -72,12 +78,34 @@ func (c *Client) SessionID() string {
 
 // Start begins a new Claude session with the given prompt.
 func (c *Client) Start(ctx context.Context, prompt string) error {
+	// Reset channels for new session (in case client is reused)
+	c.mu.Lock()
+	c.events = make(chan Event, 100)
+	c.done = make(chan struct{})
+	c.stderrBuffer = nil
+	c.mu.Unlock()
+
 	args := c.buildArgs(prompt)
 
-	c.cmd = exec.CommandContext(ctx, c.binary, args...)
+	// Use 'script' to allocate a PTY for Claude
+	// This is needed because Node.js (Claude) buffers stdout when connected to a pipe
+	// but writes immediately when connected to a terminal/PTY
+	claudeCmd := c.binary
+	for _, arg := range args {
+		// Escape single quotes in arguments
+		escaped := strings.ReplaceAll(arg, "'", "'\"'\"'")
+		claudeCmd += " '" + escaped + "'"
+	}
+
+	c.cmd = exec.CommandContext(ctx, "script", "-q", "/dev/null", "/bin/bash", "-c", claudeCmd)
 	if c.workdir != "" {
 		c.cmd.Dir = c.workdir
 	}
+
+	// Set up clean environment for Claude:
+	// - Filter NODE_OPTIONS to prevent debugger from blocking startup
+	env := filterEnv(os.Environ(), "NODE_OPTIONS")
+	c.cmd.Env = env
 
 	var err error
 	c.stdin, err = c.cmd.StdinPipe()
@@ -145,6 +173,7 @@ func (c *Client) Stop() error {
 func (c *Client) buildArgs(prompt string) []string {
 	args := []string{
 		"--print",
+		"--verbose",
 		"--dangerously-skip-permissions",
 		"--output-format", "stream-json",
 	}
@@ -159,6 +188,10 @@ func (c *Client) buildArgs(prompt string) []string {
 
 	if c.sessionID != "" {
 		args = append(args, "--resume", c.sessionID)
+	}
+
+	if c.mcpConfig != "" {
+		args = append(args, "--mcp-config", c.mcpConfig)
 	}
 
 	args = append(args, "-p", prompt)
@@ -176,16 +209,27 @@ func (c *Client) readOutput() {
 
 	for scanner.Scan() {
 		line := scanner.Text()
+
+		// Skip empty lines
 		if line == "" {
 			continue
 		}
 
+		// Filter PTY control characters - find the JSON start
+		// PTY output may have control chars like ^D or escape sequences
+		jsonStart := strings.Index(line, "{")
+		if jsonStart == -1 {
+			// Not a JSON line, skip (likely terminal control sequences)
+			continue
+		}
+		if jsonStart > 0 {
+			line = line[jsonStart:]
+		}
+
 		event, err := parser.ParseLine(line)
 		if err != nil {
-			c.events <- Event{
-				Type:  EventError,
-				Error: fmt.Sprintf("parse error: %v", err),
-			}
+			// Silently skip lines that don't parse as valid JSON
+			// These are likely terminal control sequences
 			continue
 		}
 
@@ -202,11 +246,25 @@ func (c *Client) readOutput() {
 func (c *Client) readErrors() {
 	scanner := bufio.NewScanner(c.stderr)
 	for scanner.Scan() {
+		line := scanner.Text()
+		c.mu.Lock()
+		c.stderrBuffer = append(c.stderrBuffer, line)
+		c.mu.Unlock()
 		c.events <- Event{
-			Type:    EventError,
-			Error:   scanner.Text(),
+			Type:  EventError,
+			Error: line,
 		}
 	}
+}
+
+// StderrOutput returns all collected stderr output.
+func (c *Client) StderrOutput() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.stderrBuffer) == 0 {
+		return ""
+	}
+	return strings.Join(c.stderrBuffer, "\n")
 }
 
 func (c *Client) waitForExit() {
@@ -215,4 +273,22 @@ func (c *Client) waitForExit() {
 	}
 	close(c.done)
 	close(c.events)
+}
+
+// filterEnv returns a copy of env with the specified keys removed.
+func filterEnv(env []string, keys ...string) []string {
+	result := make([]string, 0, len(env))
+	for _, e := range env {
+		skip := false
+		for _, key := range keys {
+			if strings.HasPrefix(e, key+"=") {
+				skip = true
+				break
+			}
+		}
+		if !skip {
+			result = append(result, e)
+		}
+	}
+	return result
 }

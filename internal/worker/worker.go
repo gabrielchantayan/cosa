@@ -228,9 +228,18 @@ func (w *Worker) processClaudeEvents(j *job.Job) {
 		case event, ok := <-w.client.Events():
 			if !ok {
 				// Channel closed, session ended
-				if j.GetStatus() == job.StatusRunning {
+				status := j.GetStatus()
+				if status == job.StatusRunning {
 					// Assume success if no error
 					w.handleJobSuccess(j)
+				} else if status == job.StatusQueued {
+					// Claude exited before sending init event
+					stderr := w.client.StderrOutput()
+					if stderr != "" {
+						w.handleJobFailure(j, fmt.Errorf("claude exited before starting: %s", stderr))
+					} else {
+						w.handleJobFailure(j, fmt.Errorf("claude exited before starting"))
+					}
 				}
 				return
 			}
@@ -238,8 +247,16 @@ func (w *Worker) processClaudeEvents(j *job.Job) {
 			w.handleClaudeEvent(j, event)
 
 		case <-w.client.Done():
-			if j.GetStatus() == job.StatusRunning {
+			status := j.GetStatus()
+			if status == job.StatusRunning {
 				w.handleJobSuccess(j)
+			} else if status == job.StatusQueued {
+				stderr := w.client.StderrOutput()
+				if stderr != "" {
+					w.handleJobFailure(j, fmt.Errorf("claude exited before starting: %s", stderr))
+				} else {
+					w.handleJobFailure(j, fmt.Errorf("claude exited before starting"))
+				}
 			}
 			return
 		}

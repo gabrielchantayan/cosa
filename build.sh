@@ -2,6 +2,9 @@
 
 echo "Building cosa"
 
+echo "Stopping cosa"
+cosa stop
+
 echo "Cleaning up old binaries"
 
 rm -rf bin/
@@ -12,5 +15,8 @@ echo "Building new binaries"
 
 go build -o bin/cosa ./cmd/cosa
 go build -o bin/cosad ./cmd/cosad
+
+echo "Starting cosa"
+cosa start
 
 echo "Done"

@@ -41,9 +41,21 @@ func (m *Manager) WorktreeBase() string {
 }
 
 // CreateWorktree creates a new worktree for a worker.
+// If the worktree already exists, it returns the existing one.
 func (m *Manager) CreateWorktree(name, baseBranch string) (*Worktree, error) {
 	worktreePath := filepath.Join(m.worktreeBase, name)
 	branchName := fmt.Sprintf("cosa/%s", name)
+
+	// Check if worktree already exists
+	if _, err := os.Stat(worktreePath); err == nil {
+		// Worktree exists, verify it's valid and return it
+		commit, _ := m.getHeadCommit(worktreePath)
+		return &Worktree{
+			Path:   worktreePath,
+			Branch: branchName,
+			Commit: commit,
+		}, nil
+	}
 
 	// Create branch from base
 	if baseBranch == "" {
@@ -180,15 +192,22 @@ func (m *Manager) GetCurrentBranch() (string, error) {
 
 // GetDefaultBranch attempts to determine the default branch (main/master).
 func (m *Manager) GetDefaultBranch() string {
-	// Try main first
+	// Try common default branch names first
 	if m.branchExists("main") {
 		return "main"
 	}
 	if m.branchExists("master") {
 		return "master"
 	}
-	// Fall back to HEAD
-	return "HEAD"
+
+	// Try to get the current branch name (works if we're on a named branch)
+	if branch, err := m.GetCurrentBranch(); err == nil && branch != "HEAD" && branch != "" {
+		return branch
+	}
+
+	// Last resort: return "master" as the conventional default
+	// This is better than "HEAD" which doesn't work for diffs
+	return "master"
 }
 
 func (m *Manager) branchExists(name string) bool {

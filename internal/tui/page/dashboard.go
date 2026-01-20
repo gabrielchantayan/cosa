@@ -14,6 +14,9 @@ import (
 	"cosa/internal/tui/theme"
 )
 
+// ForcedBackground is the hardcoded background color for the TUI.
+const ForcedBackground = lipgloss.Color("#0a0a0a")
+
 // FocusArea represents which panel is focused.
 type FocusArea int
 
@@ -34,6 +37,12 @@ type Dashboard struct {
 	workerList *component.WorkerList
 	jobList    *component.JobList
 	activity   *component.Activity
+
+	// Dialogs
+	newJobDialog *component.Dialog
+
+	// Callbacks
+	onCreateJob func(description string)
 }
 
 // NewDashboard creates a new dashboard page.
@@ -102,6 +111,24 @@ func (d *Dashboard) PrevFocus() {
 
 // HandleKey handles key presses on the focused component.
 func (d *Dashboard) HandleKey(key string) {
+	// Handle dialog input if visible
+	if d.newJobDialog != nil && d.newJobDialog.Visible() {
+		action := d.newJobDialog.HandleKey(key)
+		switch action {
+		case "create":
+			description := d.newJobDialog.GetInputValue()
+			if description != "" && d.onCreateJob != nil {
+				d.onCreateJob(description)
+			}
+			d.newJobDialog.Hide()
+			d.newJobDialog = nil
+		case "cancel":
+			d.newJobDialog.Hide()
+			d.newJobDialog = nil
+		}
+		return
+	}
+
 	switch d.focus {
 	case FocusWorkers:
 		switch key {
@@ -126,54 +153,133 @@ func (d *Dashboard) updateFocus() {
 }
 
 func (d *Dashboard) updateComponentSizes() {
-	// Left column: 30% width, workers and jobs stacked
+	// Content area height (total - header - footer)
+	contentHeight := d.height - 2
+
+	// Left column: 30% width
 	leftWidth := d.width * 30 / 100
-	leftHeight := (d.height - 4) / 2 // Account for header/footer, split in half
+	if leftWidth < 20 {
+		leftWidth = 20
+	}
 
-	d.workerList.SetSize(leftWidth, leftHeight)
-	d.jobList.SetSize(leftWidth, leftHeight)
+	// Each left panel gets half the content height
+	// Account for panel borders (2 lines each for top/bottom border)
+	leftPanelHeight := contentHeight / 2
+	innerLeftHeight := leftPanelHeight - 2 // Inner height after border
+	if innerLeftHeight < 3 {
+		innerLeftHeight = 3
+	}
 
-	// Right column: 70% width, activity
-	rightWidth := d.width - leftWidth - 3
-	rightHeight := d.height - 4
+	d.workerList.SetSize(leftWidth-2, innerLeftHeight)
+	d.jobList.SetSize(leftWidth-2, innerLeftHeight)
 
-	d.activity.SetSize(rightWidth, rightHeight)
+	// Right column: Activity
+	rightWidth := d.width - leftWidth - 1
+	if rightWidth < 20 {
+		rightWidth = 20
+	}
+	innerRightHeight := contentHeight - 2
+	if innerRightHeight < 5 {
+		innerRightHeight = 5
+	}
+
+	d.activity.SetSize(rightWidth-2, innerRightHeight)
 }
 
 // View renders the dashboard.
 func (d *Dashboard) View() string {
 	t := theme.Current
 
-	// Header
+	// Ensure minimum dimensions
+	if d.width < 40 || d.height < 10 {
+		return lipgloss.NewStyle().
+			Width(d.width).
+			Height(d.height).
+			Align(lipgloss.Center, lipgloss.Center).
+			Foreground(t.TextMuted).
+			Render("Terminal too small")
+	}
+
+	// Header (1 line)
 	header := d.renderHeader()
 
-	// Left column: Workers + Jobs
-	leftWidth := d.width * 30 / 100
-	leftHeight := (d.height - 4) / 2
-
-	workersPanel := d.renderPanel("WORKERS", d.workerList.View(), leftWidth, leftHeight, d.focus == FocusWorkers)
-	jobsPanel := d.renderPanel("JOBS", d.jobList.View(), leftWidth, leftHeight, d.focus == FocusJobs)
-	leftColumn := lipgloss.JoinVertical(lipgloss.Left, workersPanel, jobsPanel)
-
-	// Right column: Activity
-	rightWidth := d.width - leftWidth - 3
-	rightHeight := d.height - 4
-	activityPanel := d.renderPanel("ACTIVITY", d.activity.View(), rightWidth, rightHeight, d.focus == FocusActivity)
-
-	// Join columns
-	content := lipgloss.JoinHorizontal(lipgloss.Top, leftColumn, activityPanel)
-
-	// Footer
+	// Footer (1 line)
 	footer := d.renderFooter()
 
-	// Combine with background
+	// Content area height (total - header - footer)
+	contentHeight := d.height - 2
+
+	// Left column: 30% width, Workers and Jobs stacked
+	leftWidth := d.width * 30 / 100
+	if leftWidth < 20 {
+		leftWidth = 20
+	}
+
+	// Each left panel gets half the content height
+	leftPanelHeight := contentHeight / 2
+
+	workersPanel := d.renderPanel("WORKERS", d.workerList.View(), leftWidth, leftPanelHeight, d.focus == FocusWorkers)
+	jobsPanel := d.renderPanel("JOBS", d.jobList.View(), leftWidth, contentHeight-leftPanelHeight, d.focus == FocusJobs)
+	leftColumn := lipgloss.JoinVertical(lipgloss.Left, workersPanel, jobsPanel)
+
+	// Right column: Activity takes remaining width and full content height
+	rightWidth := d.width - leftWidth - 1 // 1 char gap between columns
+	if rightWidth < 20 {
+		rightWidth = 20
+	}
+	activityPanel := d.renderPanel("ACTIVITY", d.activity.View(), rightWidth, contentHeight, d.focus == FocusActivity)
+
+	// Join columns horizontally with a gap
+	gap := lipgloss.NewStyle().Width(1).Height(contentHeight).Render(" ")
+	content := lipgloss.JoinHorizontal(lipgloss.Top, leftColumn, gap, activityPanel)
+
+	// Combine all sections vertically
 	result := lipgloss.JoinVertical(lipgloss.Left, header, content, footer)
 
-	return lipgloss.NewStyle().
-		Background(t.Background).
+	// Base view with forced background color
+	baseView := lipgloss.NewStyle().
+		Background(ForcedBackground).
 		Width(d.width).
 		Height(d.height).
 		Render(result)
+
+	// Render dialog overlay if visible
+	if d.newJobDialog != nil && d.newJobDialog.Visible() {
+		return d.renderWithDialogOverlay(baseView)
+	}
+
+	return baseView
+}
+
+func (d *Dashboard) renderWithDialogOverlay(baseView string) string {
+	// Get dialog view centered in the screen
+	dialogView := d.newJobDialog.CenterIn(d.width, d.height)
+
+	// Split base view into lines
+	baseLines := strings.Split(baseView, "\n")
+
+	// Split dialog view into lines
+	dialogLines := strings.Split(dialogView, "\n")
+
+	// Overlay the dialog on top of the base view
+	result := make([]string, d.height)
+	for i := 0; i < d.height && i < len(baseLines); i++ {
+		if i < len(dialogLines) && strings.TrimSpace(dialogLines[i]) != "" {
+			// Use dialog line, but pad to full width
+			dialogLine := dialogLines[i]
+			dialogWidth := lipgloss.Width(dialogLine)
+			if dialogWidth < d.width {
+				dialogLine = dialogLine + strings.Repeat(" ", d.width-dialogWidth)
+			}
+			result[i] = dialogLine
+		} else {
+			result[i] = baseLines[i]
+		}
+	}
+
+	return lipgloss.NewStyle().
+		Background(ForcedBackground).
+		Render(strings.Join(result, "\n"))
 }
 
 func (d *Dashboard) renderHeader() string {
@@ -241,88 +347,74 @@ func (d *Dashboard) renderPanel(title, content string, width, height int, focuse
 	t := theme.Current
 
 	// Ensure minimum dimensions to avoid slice bounds errors
-	if width < 6 {
-		width = 6
+	if width < 8 {
+		width = 8
 	}
-	if height < 4 {
-		height = 4
+	if height < 5 {
+		height = 5
 	}
 
-	var borderStyle lipgloss.Style
+	var borderColor lipgloss.Color
 	var titleStyle lipgloss.Style
 
 	if focused {
-		borderStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(t.BorderActive)
+		borderColor = t.BorderActive
 		titleStyle = lipgloss.NewStyle().
 			Foreground(t.Primary).
 			Bold(true)
 	} else {
-		borderStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(t.Border)
+		borderColor = t.Border
 		titleStyle = lipgloss.NewStyle().
 			Foreground(t.TextMuted)
 	}
 
-	// Title with padding
-	titleStr := titleStyle.Render(fmt.Sprintf(" %s ", title))
+	// Calculate inner content dimensions (accounting for border)
+	innerWidth := width - 2   // 1 char border on each side
+	innerHeight := height - 2 // 1 char border top and bottom
 
-	// Content area
-	contentWidth := width - 4  // Account for borders and padding
-	contentHeight := height - 3 // Account for title and borders
+	if innerWidth < 4 {
+		innerWidth = 4
+	}
+	if innerHeight < 2 {
+		innerHeight = 2
+	}
 
-	// Pad or truncate content
+	// Pad or truncate content to fit
 	contentLines := strings.Split(content, "\n")
-	for len(contentLines) < contentHeight {
+	for len(contentLines) < innerHeight {
 		contentLines = append(contentLines, "")
 	}
-	if len(contentLines) > contentHeight {
-		contentLines = contentLines[:contentHeight]
+	if len(contentLines) > innerHeight {
+		contentLines = contentLines[:innerHeight]
 	}
 
-	// Ensure each line is the right width
+	// Ensure each line fits within the inner width
 	for i, line := range contentLines {
 		lineWidth := lipgloss.Width(line)
-		if lineWidth < contentWidth {
-			contentLines[i] = line + strings.Repeat(" ", contentWidth-lineWidth)
+		if lineWidth < innerWidth {
+			contentLines[i] = line + strings.Repeat(" ", innerWidth-lineWidth)
+		} else if lineWidth > innerWidth {
+			// Truncate line to fit
+			runes := []rune(line)
+			if len(runes) > innerWidth-2 {
+				contentLines[i] = string(runes[:innerWidth-2]) + ".."
+			}
 		}
 	}
 
 	paddedContent := strings.Join(contentLines, "\n")
 
-	panel := borderStyle.
-		Width(width - 2).
-		Height(height - 2).
+	// Build the panel with border
+	panel := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(borderColor).
+		Width(innerWidth).
+		Height(innerHeight).
 		Render(paddedContent)
 
-	// Add title to top border by reconstructing it
-	// We rebuild rather than slice because the border contains ANSI escape codes
-	lines := strings.Split(panel, "\n")
-	if len(lines) > 0 {
-		titleWidth := lipgloss.Width(titleStr)
-		firstLineWidth := lipgloss.Width(lines[0])
-		if firstLineWidth > titleWidth+4 {
-			// Determine border color based on focus
-			var borderColor lipgloss.Color
-			if focused {
-				borderColor = t.BorderActive
-			} else {
-				borderColor = t.Border
-			}
-			borderStyle := lipgloss.NewStyle().Foreground(borderColor)
-
-			// Reconstruct: corner + dash + title + remaining dashes + corner
-			remainingWidth := width - 2 - 1 - titleWidth - 1
-			if remainingWidth < 0 {
-				remainingWidth = 0
-			}
-			lines[0] = borderStyle.Render("╭─") + titleStr + borderStyle.Render(strings.Repeat("─", remainingWidth)+"╮")
-		}
-	}
-
-	return strings.Join(lines, "\n")
+	// Insert title into top border using shared helper
+	titleStr := titleStyle.Render(fmt.Sprintf(" %s ", title))
+	return styles.InsertPanelTitle(panel, titleStr, borderColor)
 }
 
 func formatUptime(seconds int64) string {
@@ -349,14 +441,22 @@ func max(a, b int) int {
 
 // IsInputMode returns true if the dashboard is in input mode.
 func (d *Dashboard) IsInputMode() bool {
-	// For now, no input mode - will be used when dialogs are added
-	return false
+	return d.newJobDialog != nil && d.newJobDialog.Visible()
+}
+
+// SetOnCreateJob sets the callback for when a job is created.
+func (d *Dashboard) SetOnCreateJob(fn func(description string)) {
+	d.onCreateJob = fn
 }
 
 // ShowNewJobDialog shows the new job dialog.
 func (d *Dashboard) ShowNewJobDialog() {
-	// Stub for new job dialog - will be implemented with full input component
-	d.AddActivity(time.Now().Format("15:04:05"), "", "New job dialog (press ESC to close)")
+	d.newJobDialog = component.NewDialog("New Job")
+	d.newJobDialog.SetInput("Job Description:")
+	d.newJobDialog.AddButton("Create", "create", true)
+	d.newJobDialog.AddButton("Cancel", "cancel", false)
+	d.newJobDialog.SetSize(86, 12)
+	d.newJobDialog.Show()
 }
 
 // ShowNewOperationDialog shows the new operation dialog.
@@ -399,5 +499,8 @@ func (d *Dashboard) SelectCurrent() {
 
 // CloseOverlay closes any open overlay/dialog.
 func (d *Dashboard) CloseOverlay() {
-	// Stub for closing overlays
+	if d.newJobDialog != nil {
+		d.newJobDialog.Hide()
+		d.newJobDialog = nil
+	}
 }

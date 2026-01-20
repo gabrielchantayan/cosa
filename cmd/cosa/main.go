@@ -2,16 +2,25 @@
 package main
 
 import (
+	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
 
 	"cosa/internal/config"
 	"cosa/internal/daemon"
+	"cosa/internal/job"
+	"cosa/internal/mcp"
 	"cosa/internal/protocol"
 	"cosa/internal/tui"
 )
@@ -46,7 +55,10 @@ role system and real-time TUI.`,
 		operationCmd(),
 		orderCmd(),
 		logsCmd(),
+		settingsCmd(),
 		tuiCmd(),
+		chatCmd(),
+		mcpServeCmd(),
 	)
 
 	if err := rootCmd.Execute(); err != nil {
@@ -103,8 +115,9 @@ func stopCmd() *cobra.Command {
 
 func statusCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "status",
-		Short: "Show daemon status",
+		Use:     "status",
+		Short:   "Show daemon status",
+		Aliases: []string{"s"},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client, err := daemon.Connect(cfg.SocketPath)
 			if err != nil {
@@ -386,8 +399,9 @@ Use --clear to remove the dev branch configuration and merge directly to main.`,
 
 func workerCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "worker",
-		Short: "Manage workers",
+		Use:     "worker",
+		Short:   "Manage workers",
+		Aliases: []string{"w"},
 	}
 
 	cmd.AddCommand(
@@ -674,8 +688,8 @@ func workerDetailCmd() *cobra.Command {
 func jobCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "job",
-		Aliases: []string{"j"},
 		Short:   "Manage jobs",
+		Aliases: []string{"j", "jobs"},
 	}
 
 	cmd.AddCommand(
@@ -1139,8 +1153,9 @@ func operationCancelCmd() *cobra.Command {
 
 func orderCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "order",
-		Short: "Manage standing orders for workers",
+		Use:     "order",
+		Short:   "Manage standing orders for workers",
+		Aliases: []string{"orders"},
 	}
 
 	cmd.AddCommand(
@@ -1434,12 +1449,408 @@ func splitLines(s string) []string {
 	return lines
 }
 
+// Settings command
+
+func settingsCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:     "settings",
+		Short:   "View and modify Cosa settings",
+		Aliases: []string{"config"},
+	}
+
+	cmd.AddCommand(
+		settingsListCmd(),
+		settingsGetCmd(),
+		settingsSetCmd(),
+		settingsPathCmd(),
+	)
+
+	return cmd
+}
+
+func getConfigPath() string {
+	homeDir, _ := os.UserHomeDir()
+	candidates := []string{
+		filepath.Join(homeDir, ".cosa", "config.yaml"),
+		filepath.Join(homeDir, ".config", "cosa", "config.yaml"),
+	}
+	for _, candidate := range candidates {
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+	// Default path (will be created if needed)
+	return filepath.Join(homeDir, ".cosa", "config.yaml")
+}
+
+func settingsPathCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "path",
+		Short: "Show the config file path",
+		Run: func(cmd *cobra.Command, args []string) {
+			fmt.Println(getConfigPath())
+		},
+	}
+}
+
+func settingsListCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:     "list",
+		Short:   "List all settings with their current values",
+		Aliases: []string{"ls"},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			fmt.Println("Current settings:")
+			fmt.Println()
+
+			// Core settings
+			fmt.Println("Core:")
+			fmt.Printf("  log_level          = %s\n", cfg.LogLevel)
+			fmt.Printf("  socket_path        = %s\n", cfg.SocketPath)
+			fmt.Printf("  data_dir           = %s\n", cfg.DataDir)
+			fmt.Println()
+
+			// Claude settings
+			fmt.Println("Claude:")
+			fmt.Printf("  claude.binary      = %s\n", cfg.Claude.Binary)
+			fmt.Printf("  claude.model       = %s\n", valueOrDefault(cfg.Claude.Model, "(default)"))
+			fmt.Printf("  claude.max_turns   = %d\n", cfg.Claude.MaxTurns)
+			fmt.Println()
+
+			// Worker settings
+			fmt.Println("Workers:")
+			fmt.Printf("  workers.max_concurrent = %d\n", cfg.Workers.MaxConcurrent)
+			fmt.Printf("  workers.default_role   = %s\n", cfg.Workers.DefaultRole)
+			fmt.Println()
+
+			// TUI settings
+			fmt.Println("TUI:")
+			fmt.Printf("  tui.theme          = %s\n", cfg.TUI.Theme)
+			fmt.Printf("  tui.refresh_rate   = %d\n", cfg.TUI.RefreshRate)
+			fmt.Println()
+
+			// Notification settings
+			fmt.Println("Notifications:")
+			fmt.Printf("  notifications.tui_alerts           = %t\n", cfg.Notifications.TUIAlerts)
+			fmt.Printf("  notifications.system_notifications = %t\n", cfg.Notifications.SystemNotifications)
+			fmt.Printf("  notifications.terminal_bell        = %t\n", cfg.Notifications.TerminalBell)
+			fmt.Printf("  notifications.on_job_complete      = %t\n", cfg.Notifications.OnJobComplete)
+			fmt.Printf("  notifications.on_job_failed        = %t\n", cfg.Notifications.OnJobFailed)
+			fmt.Printf("  notifications.on_worker_stuck      = %t\n", cfg.Notifications.OnWorkerStuck)
+			fmt.Println()
+
+			// Model settings
+			fmt.Println("Models:")
+			fmt.Printf("  models.default     = %s\n", valueOrDefault(cfg.Models.Default, "(claude default)"))
+			fmt.Printf("  models.underboss   = %s\n", cfg.Models.Underboss)
+			fmt.Printf("  models.consigliere = %s\n", cfg.Models.Consigliere)
+			fmt.Printf("  models.capo        = %s\n", cfg.Models.Capo)
+			fmt.Printf("  models.soldato     = %s\n", cfg.Models.Soldato)
+			fmt.Printf("  models.associate   = %s\n", cfg.Models.Associate)
+			fmt.Printf("  models.lookout     = %s\n", cfg.Models.Lookout)
+			fmt.Printf("  models.cleaner     = %s\n", cfg.Models.Cleaner)
+
+			return nil
+		},
+	}
+}
+
+func valueOrDefault(value, defaultVal string) string {
+	if value == "" {
+		return defaultVal
+	}
+	return value
+}
+
+func settingsGetCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "get <key>",
+		Short: "Get a specific setting value",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			key := strings.ToLower(args[0])
+			value, err := getSettingValue(key)
+			if err != nil {
+				return err
+			}
+			fmt.Println(value)
+			return nil
+		},
+	}
+}
+
+func getSettingValue(key string) (string, error) {
+	switch key {
+	// Core
+	case "log_level":
+		return cfg.LogLevel, nil
+	case "socket_path":
+		return cfg.SocketPath, nil
+	case "data_dir":
+		return cfg.DataDir, nil
+
+	// Claude
+	case "claude.binary":
+		return cfg.Claude.Binary, nil
+	case "claude.model":
+		return cfg.Claude.Model, nil
+	case "claude.max_turns":
+		return strconv.Itoa(cfg.Claude.MaxTurns), nil
+
+	// Workers
+	case "workers.max_concurrent":
+		return strconv.Itoa(cfg.Workers.MaxConcurrent), nil
+	case "workers.default_role":
+		return cfg.Workers.DefaultRole, nil
+
+	// TUI
+	case "tui.theme":
+		return cfg.TUI.Theme, nil
+	case "tui.refresh_rate":
+		return strconv.Itoa(cfg.TUI.RefreshRate), nil
+
+	// Notifications
+	case "notifications.tui_alerts":
+		return strconv.FormatBool(cfg.Notifications.TUIAlerts), nil
+	case "notifications.system_notifications":
+		return strconv.FormatBool(cfg.Notifications.SystemNotifications), nil
+	case "notifications.terminal_bell":
+		return strconv.FormatBool(cfg.Notifications.TerminalBell), nil
+	case "notifications.on_job_complete":
+		return strconv.FormatBool(cfg.Notifications.OnJobComplete), nil
+	case "notifications.on_job_failed":
+		return strconv.FormatBool(cfg.Notifications.OnJobFailed), nil
+	case "notifications.on_worker_stuck":
+		return strconv.FormatBool(cfg.Notifications.OnWorkerStuck), nil
+
+	// Models
+	case "models.default":
+		return cfg.Models.Default, nil
+	case "models.underboss":
+		return cfg.Models.Underboss, nil
+	case "models.consigliere":
+		return cfg.Models.Consigliere, nil
+	case "models.capo":
+		return cfg.Models.Capo, nil
+	case "models.soldato":
+		return cfg.Models.Soldato, nil
+	case "models.associate":
+		return cfg.Models.Associate, nil
+	case "models.lookout":
+		return cfg.Models.Lookout, nil
+	case "models.cleaner":
+		return cfg.Models.Cleaner, nil
+
+	default:
+		return "", fmt.Errorf("unknown setting: %s", key)
+	}
+}
+
+func settingsSetCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "set <key> <value>",
+		Short: "Set a setting value",
+		Long: `Set a configuration value. Changes are saved to the config file.
+
+Examples:
+  cosa settings set tui.theme godfather
+  cosa settings set workers.max_concurrent 10
+  cosa settings set notifications.terminal_bell true
+  cosa settings set models.soldato opus
+
+Note: Some settings require restarting the daemon to take effect.`,
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			key := strings.ToLower(args[0])
+			value := args[1]
+
+			if err := setSettingValue(key, value); err != nil {
+				return err
+			}
+
+			// Save to config file
+			configPath := getConfigPath()
+			if err := cfg.Save(configPath); err != nil {
+				return fmt.Errorf("failed to save config: %w", err)
+			}
+
+			fmt.Printf("Set %s = %s\n", key, value)
+			fmt.Printf("Config saved to %s\n", configPath)
+
+			// Warn about daemon restart if needed
+			if needsDaemonRestart(key) {
+				fmt.Println("\nNote: Restart the daemon for this change to take effect.")
+			}
+
+			return nil
+		},
+	}
+}
+
+func setSettingValue(key, value string) error {
+	switch key {
+	// Core
+	case "log_level":
+		validLevels := []string{"debug", "info", "warn", "error"}
+		if !contains(validLevels, value) {
+			return fmt.Errorf("invalid log_level: %s (must be one of: %s)", value, strings.Join(validLevels, ", "))
+		}
+		cfg.LogLevel = value
+
+	case "socket_path":
+		cfg.SocketPath = value
+
+	case "data_dir":
+		cfg.DataDir = value
+
+	// Claude
+	case "claude.binary":
+		cfg.Claude.Binary = value
+
+	case "claude.model":
+		cfg.Claude.Model = value
+
+	case "claude.max_turns":
+		n, err := strconv.Atoi(value)
+		if err != nil || n < 1 {
+			return fmt.Errorf("invalid max_turns: %s (must be a positive integer)", value)
+		}
+		cfg.Claude.MaxTurns = n
+
+	// Workers
+	case "workers.max_concurrent":
+		n, err := strconv.Atoi(value)
+		if err != nil || n < 1 {
+			return fmt.Errorf("invalid max_concurrent: %s (must be a positive integer)", value)
+		}
+		cfg.Workers.MaxConcurrent = n
+
+	case "workers.default_role":
+		validRoles := []string{"soldato", "capo", "consigliere", "underboss", "associate", "lookout", "cleaner"}
+		if !contains(validRoles, value) {
+			return fmt.Errorf("invalid default_role: %s (must be one of: %s)", value, strings.Join(validRoles, ", "))
+		}
+		cfg.Workers.DefaultRole = value
+
+	// TUI
+	case "tui.theme":
+		validThemes := []string{"noir", "godfather", "miami", "opencode"}
+		if !contains(validThemes, value) {
+			return fmt.Errorf("invalid theme: %s (must be one of: %s)", value, strings.Join(validThemes, ", "))
+		}
+		cfg.TUI.Theme = value
+
+	case "tui.refresh_rate":
+		n, err := strconv.Atoi(value)
+		if err != nil || n < 10 {
+			return fmt.Errorf("invalid refresh_rate: %s (must be at least 10 ms)", value)
+		}
+		cfg.TUI.RefreshRate = n
+
+	// Notifications
+	case "notifications.tui_alerts":
+		b, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("invalid boolean: %s (use true/false)", value)
+		}
+		cfg.Notifications.TUIAlerts = b
+
+	case "notifications.system_notifications":
+		b, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("invalid boolean: %s (use true/false)", value)
+		}
+		cfg.Notifications.SystemNotifications = b
+
+	case "notifications.terminal_bell":
+		b, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("invalid boolean: %s (use true/false)", value)
+		}
+		cfg.Notifications.TerminalBell = b
+
+	case "notifications.on_job_complete":
+		b, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("invalid boolean: %s (use true/false)", value)
+		}
+		cfg.Notifications.OnJobComplete = b
+
+	case "notifications.on_job_failed":
+		b, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("invalid boolean: %s (use true/false)", value)
+		}
+		cfg.Notifications.OnJobFailed = b
+
+	case "notifications.on_worker_stuck":
+		b, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("invalid boolean: %s (use true/false)", value)
+		}
+		cfg.Notifications.OnWorkerStuck = b
+
+	// Models
+	case "models.default":
+		cfg.Models.Default = value
+
+	case "models.underboss":
+		cfg.Models.Underboss = value
+
+	case "models.consigliere":
+		cfg.Models.Consigliere = value
+
+	case "models.capo":
+		cfg.Models.Capo = value
+
+	case "models.soldato":
+		cfg.Models.Soldato = value
+
+	case "models.associate":
+		cfg.Models.Associate = value
+
+	case "models.lookout":
+		cfg.Models.Lookout = value
+
+	case "models.cleaner":
+		cfg.Models.Cleaner = value
+
+	default:
+		return fmt.Errorf("unknown setting: %s\n\nRun 'cosa settings list' to see available settings", key)
+	}
+
+	return nil
+}
+
+func needsDaemonRestart(key string) bool {
+	// Settings that require daemon restart
+	restartKeys := []string{
+		"socket_path",
+		"data_dir",
+		"log_level",
+		"claude.binary",
+		"claude.model",
+		"claude.max_turns",
+		"workers.max_concurrent",
+	}
+	return contains(restartKeys, key)
+}
+
+func contains(slice []string, item string) bool {
+	for _, s := range slice {
+		if s == item {
+			return true
+		}
+	}
+	return false
+}
+
 // TUI command
 
 func tuiCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "tui",
-		Short: "Launch the interactive TUI dashboard",
+		Use:     "tui",
+		Aliases: []string{"t"},
+		Short:   "Launch the interactive TUI dashboard",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Ensure daemon is running
 			if !daemon.IsRunning(cfg.SocketPath) {
@@ -1542,4 +1953,314 @@ func formatDuration(d time.Duration) string {
 		return fmt.Sprintf("%dm%ds", m, s)
 	}
 	return fmt.Sprintf("%ds", s)
+}
+
+// Chat command
+
+func chatCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "chat",
+		Short: "Chat with the underboss",
+		Long: `Start an interactive chat session with the underboss (Claude).
+This allows you to have a back-and-forth conversation to discuss work,
+get advice, or coordinate tasks.
+
+Type 'exit' or 'quit' to end the chat session.
+Press Ctrl+C to abort.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client, err := daemon.Connect(cfg.SocketPath)
+			if err != nil {
+				return fmt.Errorf("daemon not running - start it with 'cosa start'")
+			}
+			defer client.Close()
+
+			// Start chat session
+			resp, err := client.Call(protocol.MethodChatStart, protocol.ChatStartParams{})
+			if err != nil {
+				return fmt.Errorf("failed to start chat: %w", err)
+			}
+			if resp.Error != nil {
+				return fmt.Errorf("failed to start chat: %s", resp.Error.Message)
+			}
+
+			var startResult protocol.ChatStartResult
+			json.Unmarshal(resp.Result, &startResult)
+
+			fmt.Println("Chat session started. Type 'exit' or 'quit' to end.")
+			fmt.Println("----------------------------------------")
+			fmt.Println()
+			if startResult.Greeting != "" {
+				fmt.Printf("Underboss: %s\n", startResult.Greeting)
+				fmt.Println()
+			}
+
+			// Read input loop
+			scanner := bufio.NewScanner(os.Stdin)
+			for {
+				fmt.Print("You: ")
+				if !scanner.Scan() {
+					break
+				}
+
+				input := strings.TrimSpace(scanner.Text())
+				if input == "" {
+					continue
+				}
+
+				// Check for exit commands
+				if input == "exit" || input == "quit" || input == "/exit" || input == "/quit" {
+					break
+				}
+
+				// Send message
+				resp, err := client.Call(protocol.MethodChatSend, protocol.ChatSendParams{
+					Message: input,
+				})
+				if err != nil {
+					fmt.Printf("Error: %v\n", err)
+					continue
+				}
+				if resp.Error != nil {
+					fmt.Printf("Error: %s\n", resp.Error.Message)
+					continue
+				}
+
+				var sendResult protocol.ChatSendResult
+				json.Unmarshal(resp.Result, &sendResult)
+
+				fmt.Println()
+				fmt.Printf("Underboss: %s\n", sendResult.Response)
+				fmt.Println()
+			}
+
+			// End chat session
+			client.Call(protocol.MethodChatEnd, nil)
+			fmt.Println()
+			fmt.Println("Chat session ended.")
+
+			return nil
+		},
+	}
+}
+
+func mcpServeCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:    "mcp-serve",
+		Short:  "Start MCP server for Claude integration",
+		Hidden: true, // Hide from help since this is called by the daemon
+		Long: `Starts an MCP (Model Context Protocol) server that provides Cosa tools to Claude.
+This command is typically invoked automatically by the daemon when starting a chat session.
+It communicates via stdin/stdout using JSON-RPC.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// Connect to daemon
+			client, err := daemon.Connect(cfg.SocketPath)
+			if err != nil {
+				return fmt.Errorf("failed to connect to daemon: %w", err)
+			}
+			defer client.Close()
+
+			// Create MCP adapter
+			// Note: We need to create a "remote" adapter that calls the daemon via RPC
+			// since we're in a separate process from the daemon
+			adapter := NewRemoteMCPAdapter(client)
+
+			// Create MCP server
+			server := mcp.NewServer(adapter)
+
+			// Set up signal handling
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			sigCh := make(chan os.Signal, 1)
+			signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+			go func() {
+				<-sigCh
+				cancel()
+			}()
+
+			// Run the MCP server on stdio
+			return server.Serve(ctx, os.Stdin, os.Stdout)
+		},
+	}
+}
+
+// RemoteMCPAdapter implements mcp.DaemonInterface by calling the daemon via RPC.
+type RemoteMCPAdapter struct {
+	client *daemon.Client
+}
+
+// NewRemoteMCPAdapter creates a new remote MCP adapter.
+func NewRemoteMCPAdapter(client *daemon.Client) *RemoteMCPAdapter {
+	return &RemoteMCPAdapter{client: client}
+}
+
+// ListWorkers returns all workers via RPC.
+func (a *RemoteMCPAdapter) ListWorkers() []protocol.WorkerInfo {
+	resp, err := a.client.Call(protocol.MethodWorkerList, nil)
+	if err != nil || resp.Error != nil {
+		return nil
+	}
+	var workers []protocol.WorkerInfo
+	json.Unmarshal(resp.Result, &workers)
+	return workers
+}
+
+// GetWorker returns worker details via RPC.
+func (a *RemoteMCPAdapter) GetWorker(name string) (*protocol.WorkerDetailInfo, error) {
+	resp, err := a.client.Call(protocol.MethodWorkerDetail, map[string]string{"name": name})
+	if err != nil {
+		return nil, err
+	}
+	if resp.Error != nil {
+		return nil, fmt.Errorf("%s", resp.Error.Message)
+	}
+	var worker protocol.WorkerDetailInfo
+	json.Unmarshal(resp.Result, &worker)
+	return &worker, nil
+}
+
+// ListJobs returns jobs via RPC.
+func (a *RemoteMCPAdapter) ListJobs(status string) []protocol.JobInfo {
+	resp, err := a.client.Call(protocol.MethodJobList, nil)
+	if err != nil || resp.Error != nil {
+		return nil
+	}
+	var jobs []protocol.JobInfo
+	json.Unmarshal(resp.Result, &jobs)
+
+	// Filter by status if specified
+	if status != "" {
+		filtered := make([]protocol.JobInfo, 0)
+		for _, j := range jobs {
+			if j.Status == status {
+				filtered = append(filtered, j)
+			}
+		}
+		return filtered
+	}
+	return jobs
+}
+
+// GetJob returns job details via RPC.
+func (a *RemoteMCPAdapter) GetJob(id string) (*protocol.JobInfo, error) {
+	resp, err := a.client.Call(protocol.MethodJobStatus, map[string]string{"id": id})
+	if err != nil {
+		return nil, err
+	}
+	if resp.Error != nil {
+		return nil, fmt.Errorf("%s", resp.Error.Message)
+	}
+	var job protocol.JobInfo
+	json.Unmarshal(resp.Result, &job)
+	return &job, nil
+}
+
+// CreateJob creates a new job via RPC.
+func (a *RemoteMCPAdapter) CreateJob(description string, priority int, territory string) (*job.Job, error) {
+	params := protocol.JobAddParams{
+		Description: description,
+		Priority:    priority,
+	}
+	resp, err := a.client.Call(protocol.MethodJobAdd, params)
+	if err != nil {
+		return nil, err
+	}
+	if resp.Error != nil {
+		return nil, fmt.Errorf("%s", resp.Error.Message)
+	}
+	var jobInfo protocol.JobInfo
+	json.Unmarshal(resp.Result, &jobInfo)
+	// Return a minimal job object
+	return &job.Job{
+		ID:          jobInfo.ID,
+		Description: jobInfo.Description,
+		Priority:    jobInfo.Priority,
+	}, nil
+}
+
+// CancelJob cancels a job via RPC.
+func (a *RemoteMCPAdapter) CancelJob(id string) error {
+	resp, err := a.client.Call(protocol.MethodJobCancel, map[string]string{"id": id})
+	if err != nil {
+		return err
+	}
+	if resp.Error != nil {
+		return fmt.Errorf("%s", resp.Error.Message)
+	}
+	return nil
+}
+
+// SetJobPriority sets job priority via RPC.
+func (a *RemoteMCPAdapter) SetJobPriority(id string, priority int) error {
+	// Note: This would need a new RPC method - for now, return not implemented
+	return fmt.Errorf("not implemented")
+}
+
+// ListActivity returns recent activity.
+func (a *RemoteMCPAdapter) ListActivity(limit int) []mcp.ActivityEntry {
+	// Activity is in the ledger - for now return empty
+	return []mcp.ActivityEntry{}
+}
+
+// GetQueueStatus returns queue status via RPC.
+func (a *RemoteMCPAdapter) GetQueueStatus() *protocol.QueueStatusResult {
+	resp, err := a.client.Call(protocol.MethodQueueStatus, nil)
+	if err != nil || resp.Error != nil {
+		return nil
+	}
+	var status protocol.QueueStatusResult
+	json.Unmarshal(resp.Result, &status)
+	return &status
+}
+
+// ListTerritories returns territories via RPC.
+func (a *RemoteMCPAdapter) ListTerritories() []mcp.TerritoryInfo {
+	resp, err := a.client.Call(protocol.MethodTerritoryList, nil)
+	if err != nil || resp.Error != nil {
+		return nil
+	}
+	var result struct {
+		Territories []struct {
+			Path       string `json:"path"`
+			RepoRoot   string `json:"repo_root"`
+			BaseBranch string `json:"base_branch"`
+		} `json:"territories"`
+	}
+	json.Unmarshal(resp.Result, &result)
+
+	territories := make([]mcp.TerritoryInfo, 0, len(result.Territories))
+	for _, t := range result.Territories {
+		territories = append(territories, mcp.TerritoryInfo{
+			Path:       t.Path,
+			BaseBranch: t.BaseBranch,
+		})
+	}
+	return territories
+}
+
+// ListOperations returns operations via RPC.
+func (a *RemoteMCPAdapter) ListOperations() []protocol.OperationInfo {
+	resp, err := a.client.Call(protocol.MethodOperationList, nil)
+	if err != nil || resp.Error != nil {
+		return nil
+	}
+	var result protocol.OperationListResult
+	json.Unmarshal(resp.Result, &result)
+	return result.Operations
+}
+
+// GetCosts returns cost summary via RPC.
+func (a *RemoteMCPAdapter) GetCosts() *mcp.CostSummary {
+	// Get status which includes cost info
+	resp, err := a.client.Call(protocol.MethodStatus, nil)
+	if err != nil || resp.Error != nil {
+		return nil
+	}
+	var status protocol.StatusResult
+	json.Unmarshal(resp.Result, &status)
+
+	return &mcp.CostSummary{
+		TotalCost:   status.TotalCost,
+		TotalTokens: status.TotalTokens,
+	}
 }

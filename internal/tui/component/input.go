@@ -16,13 +16,37 @@ type Input struct {
 
 	// Optional placeholder
 	placeholder string
+
+	// Multiline support
+	multiline bool
+	minHeight int
+	maxHeight int
 }
 
 // NewInput creates a new input component.
 func NewInput() *Input {
 	return &Input{
-		width: 40,
+		width:     40,
+		minHeight: 1,
+		maxHeight: 5,
 	}
+}
+
+// SetMultiline enables multiline input mode.
+func (i *Input) SetMultiline(enabled bool) {
+	i.multiline = enabled
+}
+
+// SetHeightLimits sets the min and max height for multiline input.
+func (i *Input) SetHeightLimits(min, max int) {
+	if min < 1 {
+		min = 1
+	}
+	if max < min {
+		max = min
+	}
+	i.minHeight = min
+	i.maxHeight = max
 }
 
 // SetWidth sets the input width.
@@ -131,6 +155,53 @@ func (i *Input) HandleKey(key string) {
 	}
 }
 
+// wrapText wraps text to fit within the given width, returning lines.
+// It performs word-aware wrapping to avoid cutting words in the middle.
+func wrapText(text string, width int) []string {
+	if width <= 0 || text == "" {
+		return []string{text}
+	}
+
+	var lines []string
+	runes := []rune(text)
+	start := 0
+
+	for start < len(runes) {
+		end := start + width
+		if end >= len(runes) {
+			lines = append(lines, string(runes[start:]))
+			break
+		}
+
+		// Look for a space to break at (word boundary)
+		breakAt := end
+		foundSpace := false
+		for i := end; i > start; i-- {
+			if runes[i] == ' ' {
+				breakAt = i
+				foundSpace = true
+				break
+			}
+		}
+
+		if foundSpace {
+			// Break at the space, don't include the space in the line
+			lines = append(lines, string(runes[start:breakAt]))
+			start = breakAt + 1 // Skip the space
+		} else {
+			// No space found - word is longer than width, must break mid-word
+			lines = append(lines, string(runes[start:end]))
+			start = end
+		}
+	}
+
+	if len(lines) == 0 {
+		lines = []string{""}
+	}
+
+	return lines
+}
+
 // View renders the input.
 func (i *Input) View() string {
 	t := theme.Current
@@ -143,6 +214,14 @@ func (i *Input) View() string {
 		borderColor = t.Border
 	}
 
+	displayWidth := i.width - 4 // Account for borders and padding
+
+	// For multiline mode, wrap text and grow vertically
+	if i.multiline {
+		return i.viewMultiline(t, borderColor, displayWidth)
+	}
+
+	// Single-line mode (original behavior)
 	boxStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(borderColor).
@@ -182,7 +261,6 @@ func (i *Input) View() string {
 	}
 
 	// Truncate if too long
-	displayWidth := i.width - 4 // Account for borders and padding
 	if lipgloss.Width(content) > displayWidth {
 		// Scroll to show cursor
 		runes := []rune(i.value)
@@ -222,6 +300,109 @@ func (i *Input) View() string {
 				Render(visibleValue)
 		}
 	}
+
+	return boxStyle.Render(content)
+}
+
+// viewMultiline renders the input in multiline mode.
+func (i *Input) viewMultiline(t theme.Theme, borderColor lipgloss.Color, displayWidth int) string {
+	textStyle := lipgloss.NewStyle().Foreground(t.Text)
+	cursorStyle := lipgloss.NewStyle().
+		Background(t.Primary).
+		Foreground(t.Background)
+
+	lines := wrapText(i.value, displayWidth)
+	numLines := len(lines)
+	if numLines < i.minHeight {
+		numLines = i.minHeight
+	}
+	if numLines > i.maxHeight {
+		numLines = i.maxHeight
+	}
+
+	// Find cursor position in wrapped text
+	cursorLine := 0
+	cursorCol := i.cursor
+	for idx, line := range lines {
+		if cursorCol <= len([]rune(line)) {
+			cursorLine = idx
+			break
+		}
+		cursorCol -= len([]rune(line))
+		cursorLine = idx + 1
+	}
+	if cursorLine >= len(lines) {
+		cursorLine = len(lines) - 1
+		if len(lines) > 0 {
+			cursorCol = len([]rune(lines[cursorLine]))
+		} else {
+			cursorCol = 0
+		}
+	}
+
+	// Determine visible line range
+	startLine := 0
+	if cursorLine >= numLines {
+		startLine = cursorLine - numLines + 1
+	}
+	endLine := startLine + numLines
+	if endLine > len(lines) {
+		endLine = len(lines)
+	}
+
+	var renderedLines []string
+	for idx := startLine; idx < endLine; idx++ {
+		line := lines[idx]
+		lineRunes := []rune(line)
+
+		if i.focused && idx == cursorLine {
+			beforeCursor := ""
+			cursorChar := " "
+			afterCursor := ""
+
+			if cursorCol < len(lineRunes) {
+				beforeCursor = string(lineRunes[:cursorCol])
+				cursorChar = string(lineRunes[cursorCol])
+				if cursorCol+1 < len(lineRunes) {
+					afterCursor = string(lineRunes[cursorCol+1:])
+				}
+			} else {
+				beforeCursor = line
+			}
+
+			renderedLine := textStyle.Render(beforeCursor) +
+				cursorStyle.Render(cursorChar) +
+				textStyle.Render(afterCursor)
+			renderedLines = append(renderedLines, renderedLine)
+		} else {
+			renderedLines = append(renderedLines, textStyle.Render(line))
+		}
+	}
+
+	// Pad with empty lines if needed
+	for len(renderedLines) < numLines {
+		if i.focused && len(renderedLines) == cursorLine && i.value == "" {
+			renderedLines = append(renderedLines, cursorStyle.Render(" "))
+		} else {
+			renderedLines = append(renderedLines, "")
+		}
+	}
+
+	// Handle placeholder
+	if i.value == "" && !i.focused && i.placeholder != "" {
+		renderedLines = []string{lipgloss.NewStyle().Foreground(t.TextMuted).Render(i.placeholder)}
+		for len(renderedLines) < i.minHeight {
+			renderedLines = append(renderedLines, "")
+		}
+	}
+
+	content := lipgloss.JoinVertical(lipgloss.Left, renderedLines...)
+
+	boxStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(borderColor).
+		Width(i.width).
+		Padding(0, 1)
 
 	return boxStyle.Render(content)
 }

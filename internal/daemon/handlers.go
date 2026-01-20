@@ -379,6 +379,7 @@ func (s *Server) handleJobAdd(req *protocol.Request) *protocol.Response {
 
 		if exists && w.GetStatus() == worker.StatusIdle {
 			j.Queue()
+			s.jobs.Save(j) // Persist queued state
 			s.ledger.Append(ledger.EventJobQueued, ledger.JobEventData{
 				ID:          j.ID,
 				Description: j.Description,
