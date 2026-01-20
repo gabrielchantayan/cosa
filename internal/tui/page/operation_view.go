@@ -274,25 +274,8 @@ func (o *OperationView) renderJobsList() string {
 		Height(contentHeight + 2).
 		Render(content)
 
-	// Insert title into border
-	panelLines := strings.Split(panel, "\n")
-	if len(panelLines) > 0 {
-		titleVisualWidth := lipgloss.Width(title)
-		firstLineWidth := lipgloss.Width(panelLines[0])
-		if firstLineWidth > titleVisualWidth+4 {
-			// Build the border with title: corner + title + remaining border
-			borderStyle := lipgloss.NewStyle().Foreground(t.BorderActive)
-			corner := borderStyle.Render("╭")
-			remainingWidth := firstLineWidth - 1 - titleVisualWidth
-			if remainingWidth < 0 {
-				remainingWidth = 0
-			}
-			borderLine := borderStyle.Render(strings.Repeat("─", remainingWidth-1) + "╮")
-			panelLines[0] = corner + title + borderLine
-		}
-	}
-
-	return strings.Join(panelLines, "\n")
+	// Insert title into border using shared helper
+	return styles.InsertPanelTitle(panel, title, t.BorderActive)
 }
 
 func (o *OperationView) renderJobLine(job OperationJobInfo, selected bool, barWidth int) string {

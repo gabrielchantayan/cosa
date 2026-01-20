@@ -412,30 +412,9 @@ func (d *Dashboard) renderPanel(title, content string, width, height int, focuse
 		Height(innerHeight).
 		Render(paddedContent)
 
-	// Insert title into top border
+	// Insert title into top border using shared helper
 	titleStr := titleStyle.Render(fmt.Sprintf(" %s ", title))
-	titleVisualWidth := lipgloss.Width(titleStr)
-	lines := strings.Split(panel, "\n")
-	if len(lines) > 0 {
-		firstLine := lines[0]
-		firstLineWidth := lipgloss.Width(firstLine)
-
-		// Insert title after the first corner character
-		if firstLineWidth > titleVisualWidth+3 {
-			// Build the border with title: corner + title + remaining border
-			borderStyle := lipgloss.NewStyle().Foreground(borderColor)
-			corner := borderStyle.Render("╭")
-			// Calculate how much border we need after the title
-			remainingWidth := firstLineWidth - 1 - titleVisualWidth
-			if remainingWidth < 0 {
-				remainingWidth = 0
-			}
-			borderLine := borderStyle.Render(strings.Repeat("─", remainingWidth-1) + "╮")
-			lines[0] = corner + titleStr + borderLine
-		}
-	}
-
-	return strings.Join(lines, "\n")
+	return styles.InsertPanelTitle(panel, titleStr, borderColor)
 }
 
 func formatUptime(seconds int64) string {
