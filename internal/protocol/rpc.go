@@ -179,11 +179,12 @@ const (
 	MethodWorkerDetail  = "worker.detail"
 
 	// Job management
-	MethodJobAdd    = "job.add"
-	MethodJobList   = "job.list"
-	MethodJobStatus = "job.status"
-	MethodJobCancel = "job.cancel"
-	MethodJobAssign = "job.assign"
+	MethodJobAdd         = "job.add"
+	MethodJobList        = "job.list"
+	MethodJobStatus      = "job.status"
+	MethodJobCancel      = "job.cancel"
+	MethodJobAssign      = "job.assign"
+	MethodJobSetPriority = "job.setPriority"
 
 	// Queue management
 	MethodQueueStatus = "queue.status"
@@ -314,6 +315,12 @@ type WorkerDetailInfo struct {
 type JobAssignParams struct {
 	JobID    string `json:"job_id"`
 	WorkerID string `json:"worker_id"`
+}
+
+// JobSetPriorityParams are parameters for job.setPriority.
+type JobSetPriorityParams struct {
+	JobID    string `json:"job_id"`
+	Priority int    `json:"priority"` // 1-5
 }
 
 // QueueStatusResult is the response for queue.status.
