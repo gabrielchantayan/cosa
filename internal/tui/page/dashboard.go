@@ -34,15 +34,20 @@ type Dashboard struct {
 	workerList *component.WorkerList
 	jobList    *component.JobList
 	activity   *component.Activity
+
+	// Dialogs
+	newJobDialog *component.Dialog
+	showDialog   bool
 }
 
 // NewDashboard creates a new dashboard page.
 func NewDashboard() *Dashboard {
 	return &Dashboard{
-		styles:     styles.New(),
-		workerList: component.NewWorkerList(),
-		jobList:    component.NewJobList(),
-		activity:   component.NewActivity(),
+		styles:       styles.New(),
+		workerList:   component.NewWorkerList(),
+		jobList:      component.NewJobList(),
+		activity:     component.NewActivity(),
+		newJobDialog: component.NewJobDialog(),
 	}
 }
 
@@ -169,11 +174,21 @@ func (d *Dashboard) View() string {
 	// Combine with background
 	result := lipgloss.JoinVertical(lipgloss.Left, header, content, footer)
 
-	return lipgloss.NewStyle().
+	base := lipgloss.NewStyle().
 		Background(t.Background).
 		Width(d.width).
 		Height(d.height).
 		Render(result)
+
+	// Overlay dialog if visible
+	if d.showDialog && d.newJobDialog != nil && d.newJobDialog.Visible() {
+		dialogView := d.newJobDialog.CenterIn(d.width, d.height)
+		// Simple overlay - in a real app you'd dim the background
+		return lipgloss.Place(d.width, d.height, lipgloss.Center, lipgloss.Center, dialogView,
+			lipgloss.WithWhitespaceBackground(t.Background))
+	}
+
+	return base
 }
 
 func (d *Dashboard) renderHeader() string {
@@ -335,14 +350,43 @@ func max(a, b int) int {
 
 // IsInputMode returns true if the dashboard is in input mode.
 func (d *Dashboard) IsInputMode() bool {
-	// For now, no input mode - will be used when dialogs are added
-	return false
+	return d.showDialog && d.newJobDialog != nil && d.newJobDialog.Visible()
 }
 
 // ShowNewJobDialog shows the new job dialog.
 func (d *Dashboard) ShowNewJobDialog() {
-	// Stub for new job dialog - will be implemented with full input component
-	d.AddActivity(time.Now().Format("15:04:05"), "", "New job dialog (press ESC to close)")
+	d.showDialog = true
+	d.newJobDialog.Show()
+}
+
+// HandleDialogKey handles key input for dialogs. Returns the action if dialog submits.
+func (d *Dashboard) HandleDialogKey(key string) string {
+	if d.showDialog && d.newJobDialog != nil && d.newJobDialog.Visible() {
+		action := d.newJobDialog.HandleKey(key)
+		if action == "cancel" {
+			d.newJobDialog.Hide()
+			d.showDialog = false
+			return ""
+		}
+		return action
+	}
+	return ""
+}
+
+// GetNewJobDescription returns the job description from the new job dialog.
+func (d *Dashboard) GetNewJobDescription() string {
+	if d.newJobDialog != nil {
+		return d.newJobDialog.GetInputValue()
+	}
+	return ""
+}
+
+// HideNewJobDialog hides the new job dialog and resets it.
+func (d *Dashboard) HideNewJobDialog() {
+	if d.newJobDialog != nil {
+		d.newJobDialog.Hide()
+	}
+	d.showDialog = false
 }
 
 // ShowNewOperationDialog shows the new operation dialog.
@@ -385,5 +429,8 @@ func (d *Dashboard) SelectCurrent() {
 
 // CloseOverlay closes any open overlay/dialog.
 func (d *Dashboard) CloseOverlay() {
-	// Stub for closing overlays
+	if d.showDialog && d.newJobDialog != nil {
+		d.newJobDialog.Hide()
+		d.showDialog = false
+	}
 }
