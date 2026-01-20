@@ -253,6 +253,7 @@ type JobEventData struct {
 	Description string `json:"description"`
 	Worker      string `json:"worker,omitempty"`
 	WorkerName  string `json:"worker_name,omitempty"`
+	Priority    int    `json:"priority,omitempty"`
 	Error       string `json:"error,omitempty"`
 }
 

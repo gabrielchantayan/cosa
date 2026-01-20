@@ -697,6 +697,46 @@ func (s *Server) handleJobStatus(req *protocol.Request) *protocol.Response {
 	return resp
 }
 
+func (s *Server) handleJobSetPriority(req *protocol.Request) *protocol.Response {
+	var params protocol.JobSetPriorityParams
+	if req.Params != nil {
+		json.Unmarshal(req.Params, &params)
+	}
+
+	if params.JobID == "" {
+		resp, _ := protocol.NewErrorResponse(req.ID, protocol.InvalidParams, "job_id is required", nil)
+		return resp
+	}
+
+	if params.Priority < 1 || params.Priority > 5 {
+		resp, _ := protocol.NewErrorResponse(req.ID, protocol.InvalidParams, "priority must be between 1 and 5", nil)
+		return resp
+	}
+
+	j, exists := s.jobs.Get(params.JobID)
+	if !exists {
+		resp, _ := protocol.NewErrorResponse(req.ID, protocol.ErrJobNotFound, "job not found", nil)
+		return resp
+	}
+
+	j.SetPriority(params.Priority)
+	s.jobs.Save(j)
+
+	s.ledger.Append(ledger.EventType("job.priority_changed"), ledger.JobEventData{
+		ID:       j.ID,
+		Priority: j.Priority,
+	})
+
+	resp, _ := protocol.NewResponse(req.ID, protocol.JobInfo{
+		ID:          j.ID,
+		Description: j.Description,
+		Status:      string(j.GetStatus()),
+		Priority:    j.Priority,
+		CreatedAt:   j.CreatedAt.Unix(),
+	})
+	return resp
+}
+
 // loadExistingTerritory tries to load an existing territory from the working directory
 func (s *Server) loadExistingTerritory(path string) error {
 	s.mu.Lock()
