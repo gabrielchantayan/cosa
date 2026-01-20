@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -753,8 +754,8 @@ func jobAddCmd() *cobra.Command {
 
 func jobListCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "list",
-		Short: "List all jobs",
+		Use:     "list",
+		Short:   "List all jobs",
 		Aliases: []string{"ls"},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client, err := daemon.Connect(cfg.SocketPath)
@@ -780,13 +781,20 @@ func jobListCmd() *cobra.Command {
 				return nil
 			}
 
-			fmt.Printf("%-10s %-12s %-4s %-40s\n", "ID", "STATUS", "PRI", "DESCRIPTION")
+			// Sort jobs by CreatedAt timestamp (newest first)
+			sort.Slice(jobs, func(i, j int) bool {
+				return jobs[i].CreatedAt > jobs[j].CreatedAt
+			})
+
+			fmt.Printf("%-10s %-12s %-4s %-20s %-30s\n", "ID", "STATUS", "PRI", "CREATED", "DESCRIPTION")
 			for _, j := range jobs {
 				desc := j.Description
-				if len(desc) > 38 {
-					desc = desc[:38] + ".."
+				if len(desc) > 28 {
+					desc = desc[:28] + ".."
 				}
-				fmt.Printf("%-10s %-12s %-4d %-40s\n", j.ID[:8], j.Status, j.Priority, desc)
+				// Convert Unix timestamp to local time
+				created := time.Unix(j.CreatedAt, 0).Local().Format("2006/01/02 15:04:05")
+				fmt.Printf("%-10s %-12s %-4d %-20s %-30s\n", j.ID[:8], j.Status, j.Priority, created, desc)
 			}
 
 			return nil
