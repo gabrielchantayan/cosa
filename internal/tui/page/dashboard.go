@@ -230,7 +230,7 @@ func (d *Dashboard) View() string {
 	activityPanel := d.renderPanel("ACTIVITY", d.activity.View(), rightWidth, contentHeight, d.focus == FocusActivity)
 
 	// Join columns horizontally with a gap
-	gap := lipgloss.NewStyle().Width(1).Render(" ")
+	gap := lipgloss.NewStyle().Width(1).Height(contentHeight).Render(" ")
 	content := lipgloss.JoinHorizontal(lipgloss.Top, leftColumn, gap, activityPanel)
 
 	// Combine all sections vertically
@@ -414,19 +414,24 @@ func (d *Dashboard) renderPanel(title, content string, width, height int, focuse
 
 	// Insert title into top border
 	titleStr := titleStyle.Render(fmt.Sprintf(" %s ", title))
+	titleVisualWidth := lipgloss.Width(titleStr)
 	lines := strings.Split(panel, "\n")
 	if len(lines) > 0 {
-		firstLine := []rune(lines[0])
-		titleRunes := []rune(titleStr)
-		titleWidth := len(titleRunes)
+		firstLine := lines[0]
+		firstLineWidth := lipgloss.Width(firstLine)
 
 		// Insert title after the first corner character
-		if len(firstLine) > titleWidth+3 {
-			newFirst := make([]rune, 0, len(firstLine))
-			newFirst = append(newFirst, firstLine[0])          // Corner
-			newFirst = append(newFirst, titleRunes...)         // Title
-			newFirst = append(newFirst, firstLine[1+titleWidth:]...) // Rest of border
-			lines[0] = string(newFirst)
+		if firstLineWidth > titleVisualWidth+3 {
+			// Build the border with title: corner + title + remaining border
+			borderStyle := lipgloss.NewStyle().Foreground(borderColor)
+			corner := borderStyle.Render("╭")
+			// Calculate how much border we need after the title
+			remainingWidth := firstLineWidth - 1 - titleVisualWidth
+			if remainingWidth < 0 {
+				remainingWidth = 0
+			}
+			borderLine := borderStyle.Render(strings.Repeat("─", remainingWidth-1) + "╮")
+			lines[0] = corner + titleStr + borderLine
 		}
 	}
 

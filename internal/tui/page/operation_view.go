@@ -277,9 +277,18 @@ func (o *OperationView) renderJobsList() string {
 	// Insert title into border
 	panelLines := strings.Split(panel, "\n")
 	if len(panelLines) > 0 {
-		titleWidth := lipgloss.Width(title)
-		if len(panelLines[0]) > titleWidth+4 {
-			panelLines[0] = panelLines[0][:2] + title + panelLines[0][2+titleWidth:]
+		titleVisualWidth := lipgloss.Width(title)
+		firstLineWidth := lipgloss.Width(panelLines[0])
+		if firstLineWidth > titleVisualWidth+4 {
+			// Build the border with title: corner + title + remaining border
+			borderStyle := lipgloss.NewStyle().Foreground(t.BorderActive)
+			corner := borderStyle.Render("╭")
+			remainingWidth := firstLineWidth - 1 - titleVisualWidth
+			if remainingWidth < 0 {
+				remainingWidth = 0
+			}
+			borderLine := borderStyle.Render(strings.Repeat("─", remainingWidth-1) + "╮")
+			panelLines[0] = corner + title + borderLine
 		}
 	}
 
