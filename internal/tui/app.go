@@ -19,11 +19,20 @@ import (
 type App struct {
 	client    *daemon.Client
 	dashboard *page.Dashboard
+	chat      *page.Chat
 	styles    styles.Styles
 	width     int
 	height    int
 	err       error
 	quitting  bool
+
+	// Page routing
+	activePage string // "dashboard" or "chat"
+
+	// Chat state
+	chatStarted bool
+	workers     []protocol.WorkerInfo
+	jobs        []protocol.JobInfo
 }
 
 // Messages
@@ -36,15 +45,29 @@ type jobsMsg []protocol.JobInfo
 type eventMsg ledger.Event
 type errMsg error
 
+// Chat messages
+type chatStartedMsg struct {
+	sessionID string
+	greeting  string
+	err       error
+}
+type chatResponseMsg struct {
+	response string
+	err      error
+}
+type chatLoadingTickMsg struct{}
+
 // NewApp creates a new TUI application.
 func NewApp(client *daemon.Client) *App {
 	app := &App{
-		client:    client,
-		dashboard: page.NewDashboard(),
-		styles:    styles.New(),
+		client:     client,
+		dashboard:  page.NewDashboard(),
+		chat:       page.NewChat(),
+		styles:     styles.New(),
+		activePage: "dashboard",
 	}
 
-	// Set up callbacks
+	// Set up dashboard callbacks
 	app.dashboard.SetOnCreateJob(func(description string) {
 		app.createJob(description)
 	})
@@ -80,26 +103,38 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.width = msg.Width
 		a.height = msg.Height
 		a.dashboard.SetSize(msg.Width, msg.Height)
+		a.chat.SetSize(msg.Width, msg.Height)
 		return a, nil
 
 	case tickMsg:
-		return a, tea.Batch(
+		cmds := []tea.Cmd{
 			a.fetchStatus,
 			a.fetchWorkers,
 			a.fetchJobs,
 			a.tickEvery(time.Second),
-		)
+		}
+		// Add loading tick for chat if loading
+		if a.activePage == "chat" && a.chat.IsLoading() {
+			cmds = append(cmds, a.chatLoadingTick())
+		}
+		return a, tea.Batch(cmds...)
 
 	case statusMsg:
 		a.dashboard.SetStatus(msg)
 		return a, nil
 
 	case workersMsg:
+		a.workers = msg
 		a.dashboard.SetWorkers(msg)
+		// Update chat sidebar
+		a.chat.SetWorkers(msg)
 		return a, nil
 
 	case jobsMsg:
+		a.jobs = msg
 		a.dashboard.SetJobs(msg)
+		// Update chat job counts
+		a.updateChatJobCounts()
 		return a, nil
 
 	case eventMsg:
@@ -109,12 +144,48 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case errMsg:
 		a.err = msg
 		return a, nil
+
+	// Chat messages
+	case chatStartedMsg:
+		if msg.err != nil {
+			a.dashboard.AddActivity(time.Now().Format("15:04:05"), "", fmt.Sprintf("Chat error: %v", msg.err))
+			a.activePage = "dashboard"
+			return a, nil
+		}
+		a.chatStarted = true
+		a.chat.SetSessionID(msg.sessionID, false)
+		if msg.greeting != "" {
+			a.chat.AddMessage("assistant", msg.greeting)
+		}
+		a.chat.SetLoading(false)
+		return a, nil
+
+	case chatResponseMsg:
+		a.chat.SetLoading(false)
+		if msg.err != nil {
+			a.chat.AddMessage("assistant", fmt.Sprintf("Error: %v", msg.err))
+		} else {
+			a.chat.AddMessage("assistant", msg.response)
+		}
+		return a, nil
+
+	case chatLoadingTickMsg:
+		a.chat.TickLoading()
+		if a.chat.IsLoading() {
+			return a, a.chatLoadingTick()
+		}
+		return a, nil
 	}
 
 	return a, nil
 }
 
 func (a *App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Handle chat page
+	if a.activePage == "chat" {
+		return a.handleChatKey(msg)
+	}
+
 	// Handle input mode first
 	if a.dashboard.IsInputMode() {
 		a.dashboard.HandleKey(msg.String())
@@ -125,6 +196,10 @@ func (a *App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "q", "ctrl+c":
 		a.quitting = true
 		return a, tea.Quit
+
+	case "c":
+		// Open chat with The Underboss
+		return a.openChat()
 
 	case "tab":
 		a.dashboard.NextFocus()
@@ -209,6 +284,31 @@ func (a *App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return a, nil
 }
 
+func (a *App) handleChatKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	result := a.chat.HandleKey(msg.String())
+
+	switch result {
+	case "exit":
+		a.activePage = "dashboard"
+		return a, nil
+	case "send":
+		input := a.chat.GetInput()
+		if input != "" {
+			a.chat.AddMessage("user", input)
+			a.chat.SetLoading(true)
+			return a, tea.Batch(
+				a.sendChatMessage(input),
+				a.chatLoadingTick(),
+			)
+		}
+	case "cancel":
+		a.chat.SetLoading(false)
+		// TODO: Actually cancel the request if possible
+	}
+
+	return a, nil
+}
+
 func (a *App) handleEvent(event ledger.Event) {
 	timeStr := event.Timestamp.Format("15:04:05")
 	var worker, message string
@@ -276,6 +376,10 @@ func (a *App) View() string {
 
 	if a.err != nil {
 		return fmt.Sprintf("Error: %v\n", a.err)
+	}
+
+	if a.activePage == "chat" {
+		return a.chat.View()
 	}
 
 	return a.dashboard.View()
@@ -369,6 +473,101 @@ func truncate(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen-2] + ".."
+}
+
+// Chat commands
+
+func (a *App) openChat() (tea.Model, tea.Cmd) {
+	a.activePage = "chat"
+	a.chat.SetSize(a.width, a.height)
+	a.chat.SetWorkers(a.workers)
+	a.updateChatJobCounts()
+
+	// If chat not started, start it
+	if !a.chatStarted {
+		a.chat.SetLoading(true)
+		return a, tea.Batch(
+			a.startChat(),
+			a.chatLoadingTick(),
+		)
+	}
+
+	return a, nil
+}
+
+func (a *App) startChat() tea.Cmd {
+	return func() tea.Msg {
+		if a.client == nil {
+			return chatStartedMsg{err: fmt.Errorf("no connection to daemon")}
+		}
+
+		resp, err := a.client.Call(protocol.MethodChatStart, nil)
+		if err != nil {
+			return chatStartedMsg{err: err}
+		}
+
+		if resp.Error != nil {
+			return chatStartedMsg{err: fmt.Errorf("%s", resp.Error.Message)}
+		}
+
+		var result protocol.ChatStartResult
+		if err := json.Unmarshal(resp.Result, &result); err != nil {
+			return chatStartedMsg{err: err}
+		}
+
+		return chatStartedMsg{
+			sessionID: result.SessionID,
+			greeting:  result.Greeting,
+		}
+	}
+}
+
+func (a *App) sendChatMessage(message string) tea.Cmd {
+	return func() tea.Msg {
+		if a.client == nil {
+			return chatResponseMsg{err: fmt.Errorf("no connection to daemon")}
+		}
+
+		resp, err := a.client.Call(protocol.MethodChatSend, protocol.ChatSendParams{
+			Message: message,
+		})
+		if err != nil {
+			return chatResponseMsg{err: err}
+		}
+
+		if resp.Error != nil {
+			return chatResponseMsg{err: fmt.Errorf("%s", resp.Error.Message)}
+		}
+
+		var result protocol.ChatSendResult
+		if err := json.Unmarshal(resp.Result, &result); err != nil {
+			return chatResponseMsg{err: err}
+		}
+
+		return chatResponseMsg{response: result.Response}
+	}
+}
+
+func (a *App) chatLoadingTick() tea.Cmd {
+	return tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
+		return chatLoadingTickMsg{}
+	})
+}
+
+func (a *App) updateChatJobCounts() {
+	var pending, inProgress int
+	for _, j := range a.jobs {
+		switch j.Status {
+		case "pending", "queued":
+			pending++
+		case "running":
+			inProgress++
+		}
+	}
+	a.chat.SetJobCounts(page.JobCounts{
+		Pending:    pending,
+		InProgress: inProgress,
+	})
 }
 
 // Run starts the TUI.

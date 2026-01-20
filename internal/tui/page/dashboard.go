@@ -168,8 +168,9 @@ func (d *Dashboard) View() string {
 	rightHeight := d.height - 4
 	activityPanel := d.renderPanel("ACTIVITY", d.activity.View(), rightWidth, rightHeight, d.focus == FocusActivity)
 
-	// Join columns
-	content := lipgloss.JoinHorizontal(lipgloss.Top, leftColumn, activityPanel)
+	// Join columns horizontally with a gap
+	gap := lipgloss.NewStyle().Width(1).Height(rightHeight).Render(" ")
+	content := lipgloss.JoinHorizontal(lipgloss.Top, leftColumn, gap, activityPanel)
 
 	// Footer
 	footer := d.renderFooter()
@@ -296,18 +297,21 @@ func (d *Dashboard) renderPanel(title, content string, width, height int, focuse
 
 	var borderStyle lipgloss.Style
 	var titleStyle lipgloss.Style
+	var borderColor lipgloss.Color
 
 	if focused {
+		borderColor = t.BorderActive
 		borderStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
-			BorderForeground(t.BorderActive)
+			BorderForeground(borderColor)
 		titleStyle = lipgloss.NewStyle().
 			Foreground(t.Primary).
 			Bold(true)
 	} else {
+		borderColor = t.Border
 		borderStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
-			BorderForeground(t.Border)
+			BorderForeground(borderColor)
 		titleStyle = lipgloss.NewStyle().
 			Foreground(t.TextMuted)
 	}
@@ -343,18 +347,8 @@ func (d *Dashboard) renderPanel(title, content string, width, height int, focuse
 		Height(height - 2).
 		Render(paddedContent)
 
-	// Add title to top border
-	lines := strings.Split(panel, "\n")
-	if len(lines) > 0 {
-		firstLine := lines[0]
-		// Replace part of the top border with the title
-		titleWidth := lipgloss.Width(titleStr)
-		if len(firstLine) > titleWidth+4 {
-			lines[0] = firstLine[:2] + titleStr + firstLine[2+titleWidth:]
-		}
-	}
-
-	return strings.Join(lines, "\n")
+	// Insert title into top border using shared helper
+	return styles.InsertPanelTitle(panel, titleStr, borderColor)
 }
 
 func formatUptime(seconds int64) string {

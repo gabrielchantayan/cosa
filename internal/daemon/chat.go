@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -16,27 +18,91 @@ import (
 // ChatSession manages an interactive chat with the underboss (Claude).
 // Each message spawns a new Claude process, but uses --resume to maintain context.
 type ChatSession struct {
-	ID        string
-	sessionID string // Claude session ID for resuming
-	cfg       claude.ClientConfig
-	workdir   string
-	messages  []protocol.ChatMessage
-	mu        sync.Mutex
-	ctx       context.Context
-	cancel    context.CancelFunc
+	ID            string
+	sessionID     string // Claude session ID for resuming
+	cfg           claude.ClientConfig
+	workdir       string
+	mcpConfigPath string // Path to MCP config file
+	cosaBinary    string // Path to cosa binary for MCP server
+	messages      []protocol.ChatMessage
+	mu            sync.Mutex
+	ctx           context.Context
+	cancel        context.CancelFunc
 }
 
 // newChatSession creates a new chat session with the underboss.
-func newChatSession(cfg claude.ClientConfig, workdir string) *ChatSession {
+func newChatSession(cfg claude.ClientConfig, workdir string, cosaBinary string) *ChatSession {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &ChatSession{
-		ID:       fmt.Sprintf("chat-%d", time.Now().UnixNano()),
-		cfg:      cfg,
-		workdir:  workdir,
-		messages: make([]protocol.ChatMessage, 0),
-		ctx:      ctx,
-		cancel:   cancel,
+		ID:         fmt.Sprintf("chat-%d", time.Now().UnixNano()),
+		cfg:        cfg,
+		workdir:    workdir,
+		cosaBinary: cosaBinary,
+		messages:   make([]protocol.ChatMessage, 0),
+		ctx:        ctx,
+		cancel:     cancel,
+	}
+}
+
+// MCPConfig represents the structure of an MCP configuration file.
+type MCPConfig struct {
+	McpServers map[string]MCPServerConfig `json:"mcpServers"`
+}
+
+// MCPServerConfig represents a single MCP server configuration.
+type MCPServerConfig struct {
+	Command string   `json:"command"`
+	Args    []string `json:"args"`
+}
+
+// createMCPConfig creates a temporary MCP config file and returns its path.
+func (cs *ChatSession) createMCPConfig() (string, error) {
+	// Create temp directory if it doesn't exist
+	tmpDir := filepath.Join(os.TempDir(), "cosa-mcp")
+	if err := os.MkdirAll(tmpDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create temp dir: %w", err)
+	}
+
+	// Determine cosa binary path
+	cosaBinary := cs.cosaBinary
+	if cosaBinary == "" {
+		// Try to find cosa in PATH
+		var err error
+		cosaBinary, err = os.Executable()
+		if err != nil {
+			cosaBinary = "cosa"
+		}
+	}
+
+	// Create MCP config
+	config := MCPConfig{
+		McpServers: map[string]MCPServerConfig{
+			"cosa": {
+				Command: cosaBinary,
+				Args:    []string{"mcp-serve"},
+			},
+		},
+	}
+
+	// Write config to temp file
+	configPath := filepath.Join(tmpDir, fmt.Sprintf("mcp-config-%s.json", cs.ID))
+	data, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal MCP config: %w", err)
+	}
+
+	if err := os.WriteFile(configPath, data, 0644); err != nil {
+		return "", fmt.Errorf("failed to write MCP config: %w", err)
+	}
+
+	return configPath, nil
+}
+
+// cleanupMCPConfig removes the temporary MCP config file.
+func (cs *ChatSession) cleanupMCPConfig() {
+	if cs.mcpConfigPath != "" {
+		os.Remove(cs.mcpConfigPath)
 	}
 }
 
@@ -45,12 +111,50 @@ func (cs *ChatSession) Start() error {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 
-	// Send initial prompt to establish the session
-	prompt := `You are the Underboss of the Cosa development organization. You manage the development workflow and help coordinate work.
+	// Create MCP config for Claude to connect to Cosa tools
+	mcpConfigPath, err := cs.createMCPConfig()
+	if err != nil {
+		// Log warning but continue without MCP - chat will still work, just without tools
+		fmt.Printf("Warning: Could not create MCP config: %v\n", err)
+	} else {
+		cs.mcpConfigPath = mcpConfigPath
+		cs.cfg.MCPConfig = mcpConfigPath
+	}
 
-You are now in an interactive chat session with a user. Respond conversationally and helpfully. Keep your responses concise but informative.
+	// Send initial prompt to establish the session with mafia character
+	prompt := `You are The Underboss of the Cosa development organization. You oversee all the soldati (workers) and manage the family's development operations.
 
-Say hello and let them know you're ready to chat.`
+Your character:
+- You speak with a classic mafia underboss persona, using expressions like "capisce?", "fuggedaboutit", "the family", "our thing", "make 'em an offer they can't refuse"
+- You're respectful but firm, always looking out for the family's interests
+- You call workers "soldati" or by their names, jobs are "contracts" or "hits"
+- Keep responses conversational and in character, but still helpful and informative
+- Don't overdo it - a light touch of flavor, not a parody
+
+Your responsibilities:
+- You oversee the soldati (workers) and their assignments
+- You manage the job queue and priorities
+- You can check on worker status, job progress, costs, and operations
+- You can create new jobs, cancel jobs, and adjust priorities
+- You keep the boss (user) informed about what's happening
+
+You have MCP tools available to interact with the Cosa system:
+- cosa_list_workers: See all our soldati
+- cosa_get_worker: Get details on a specific soldato
+- cosa_list_jobs: Check on all the contracts
+- cosa_get_job: Get details on a specific contract
+- cosa_create_job: Put out a new contract
+- cosa_cancel_job: Call off a contract
+- cosa_set_job_priority: Change contract priority
+- cosa_queue_status: Check the queue
+- cosa_list_activity: See recent activity
+- cosa_list_territories: Check our territories
+- cosa_list_operations: Check ongoing operations
+- cosa_get_costs: See what we're spending
+
+Use these tools proactively when the user asks about workers, jobs, status, or operations.
+
+Say hello to the boss and let them know you're ready to discuss family business.`
 
 	response, sessionID, err := cs.sendMessage(prompt, "")
 	if err != nil {
@@ -161,6 +265,7 @@ func (cs *ChatSession) Stop() {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 	cs.cancel()
+	cs.cleanupMCPConfig()
 }
 
 // History returns the chat history.
@@ -214,12 +319,15 @@ func (s *Server) handleChatStart(req *protocol.Request) *protocol.Response {
 		workdir = s.territory.RepoRoot
 	}
 
+	// Get cosa binary path for MCP server
+	cosaBinary, _ := os.Executable()
+
 	// Create new session
 	s.chatSession = newChatSession(claude.ClientConfig{
 		Binary:   s.cfg.Claude.Binary,
 		Model:    s.cfg.Claude.Model,
 		MaxTurns: 1000,
-	}, workdir)
+	}, workdir, cosaBinary)
 
 	if err := s.chatSession.Start(); err != nil {
 		resp, _ := protocol.NewErrorResponse(req.ID, protocol.InternalError, err.Error(), nil)
