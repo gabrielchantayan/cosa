@@ -105,7 +105,7 @@ func (i *Input) HandleKey(key string) {
 	case "ctrl+k":
 		// Clear to end
 		i.value = i.value[:i.cursor]
-	case "ctrl+w":
+	case "ctrl+w", "alt+backspace":
 		// Delete word backward
 		if i.cursor > 0 {
 			// Find start of word
