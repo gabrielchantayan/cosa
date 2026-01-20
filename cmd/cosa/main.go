@@ -700,9 +700,10 @@ func jobAddCmd() *cobra.Command {
 	var priority int
 
 	cmd := &cobra.Command{
-		Use:   "add <description>",
-		Short: "Add a new job",
-		Args:  cobra.ExactArgs(1),
+		Use:     "add <description>",
+		Aliases: []string{"a"},
+		Short:   "Add a new job",
+		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client, err := daemon.Connect(cfg.SocketPath)
 			if err != nil {
