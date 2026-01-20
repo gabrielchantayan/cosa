@@ -16,4 +16,7 @@ echo "Building new binaries"
 go build -o bin/cosa ./cmd/cosa
 go build -o bin/cosad ./cmd/cosad
 
+echo "Starting cosa"
+cosa start
+
 echo "Done"
