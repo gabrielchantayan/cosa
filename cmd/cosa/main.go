@@ -3,19 +3,24 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
 
 	"cosa/internal/config"
 	"cosa/internal/daemon"
+	"cosa/internal/job"
+	"cosa/internal/mcp"
 	"cosa/internal/protocol"
 	"cosa/internal/tui"
 )
@@ -53,6 +58,7 @@ role system and real-time TUI.`,
 		settingsCmd(),
 		tuiCmd(),
 		chatCmd(),
+		mcpServeCmd(),
 	)
 
 	if err := rootCmd.Execute(); err != nil {
@@ -2033,5 +2039,227 @@ Press Ctrl+C to abort.`,
 
 			return nil
 		},
+	}
+}
+
+func mcpServeCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:    "mcp-serve",
+		Short:  "Start MCP server for Claude integration",
+		Hidden: true, // Hide from help since this is called by the daemon
+		Long: `Starts an MCP (Model Context Protocol) server that provides Cosa tools to Claude.
+This command is typically invoked automatically by the daemon when starting a chat session.
+It communicates via stdin/stdout using JSON-RPC.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// Connect to daemon
+			client, err := daemon.Connect(cfg.SocketPath)
+			if err != nil {
+				return fmt.Errorf("failed to connect to daemon: %w", err)
+			}
+			defer client.Close()
+
+			// Create MCP adapter
+			// Note: We need to create a "remote" adapter that calls the daemon via RPC
+			// since we're in a separate process from the daemon
+			adapter := NewRemoteMCPAdapter(client)
+
+			// Create MCP server
+			server := mcp.NewServer(adapter)
+
+			// Set up signal handling
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			sigCh := make(chan os.Signal, 1)
+			signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+			go func() {
+				<-sigCh
+				cancel()
+			}()
+
+			// Run the MCP server on stdio
+			return server.Serve(ctx, os.Stdin, os.Stdout)
+		},
+	}
+}
+
+// RemoteMCPAdapter implements mcp.DaemonInterface by calling the daemon via RPC.
+type RemoteMCPAdapter struct {
+	client *daemon.Client
+}
+
+// NewRemoteMCPAdapter creates a new remote MCP adapter.
+func NewRemoteMCPAdapter(client *daemon.Client) *RemoteMCPAdapter {
+	return &RemoteMCPAdapter{client: client}
+}
+
+// ListWorkers returns all workers via RPC.
+func (a *RemoteMCPAdapter) ListWorkers() []protocol.WorkerInfo {
+	resp, err := a.client.Call(protocol.MethodWorkerList, nil)
+	if err != nil || resp.Error != nil {
+		return nil
+	}
+	var workers []protocol.WorkerInfo
+	json.Unmarshal(resp.Result, &workers)
+	return workers
+}
+
+// GetWorker returns worker details via RPC.
+func (a *RemoteMCPAdapter) GetWorker(name string) (*protocol.WorkerDetailInfo, error) {
+	resp, err := a.client.Call(protocol.MethodWorkerDetail, map[string]string{"name": name})
+	if err != nil {
+		return nil, err
+	}
+	if resp.Error != nil {
+		return nil, fmt.Errorf("%s", resp.Error.Message)
+	}
+	var worker protocol.WorkerDetailInfo
+	json.Unmarshal(resp.Result, &worker)
+	return &worker, nil
+}
+
+// ListJobs returns jobs via RPC.
+func (a *RemoteMCPAdapter) ListJobs(status string) []protocol.JobInfo {
+	resp, err := a.client.Call(protocol.MethodJobList, nil)
+	if err != nil || resp.Error != nil {
+		return nil
+	}
+	var jobs []protocol.JobInfo
+	json.Unmarshal(resp.Result, &jobs)
+
+	// Filter by status if specified
+	if status != "" {
+		filtered := make([]protocol.JobInfo, 0)
+		for _, j := range jobs {
+			if j.Status == status {
+				filtered = append(filtered, j)
+			}
+		}
+		return filtered
+	}
+	return jobs
+}
+
+// GetJob returns job details via RPC.
+func (a *RemoteMCPAdapter) GetJob(id string) (*protocol.JobInfo, error) {
+	resp, err := a.client.Call(protocol.MethodJobStatus, map[string]string{"id": id})
+	if err != nil {
+		return nil, err
+	}
+	if resp.Error != nil {
+		return nil, fmt.Errorf("%s", resp.Error.Message)
+	}
+	var job protocol.JobInfo
+	json.Unmarshal(resp.Result, &job)
+	return &job, nil
+}
+
+// CreateJob creates a new job via RPC.
+func (a *RemoteMCPAdapter) CreateJob(description string, priority int, territory string) (*job.Job, error) {
+	params := protocol.JobAddParams{
+		Description: description,
+		Priority:    priority,
+	}
+	resp, err := a.client.Call(protocol.MethodJobAdd, params)
+	if err != nil {
+		return nil, err
+	}
+	if resp.Error != nil {
+		return nil, fmt.Errorf("%s", resp.Error.Message)
+	}
+	var jobInfo protocol.JobInfo
+	json.Unmarshal(resp.Result, &jobInfo)
+	// Return a minimal job object
+	return &job.Job{
+		ID:          jobInfo.ID,
+		Description: jobInfo.Description,
+		Priority:    jobInfo.Priority,
+	}, nil
+}
+
+// CancelJob cancels a job via RPC.
+func (a *RemoteMCPAdapter) CancelJob(id string) error {
+	resp, err := a.client.Call(protocol.MethodJobCancel, map[string]string{"id": id})
+	if err != nil {
+		return err
+	}
+	if resp.Error != nil {
+		return fmt.Errorf("%s", resp.Error.Message)
+	}
+	return nil
+}
+
+// SetJobPriority sets job priority via RPC.
+func (a *RemoteMCPAdapter) SetJobPriority(id string, priority int) error {
+	// Note: This would need a new RPC method - for now, return not implemented
+	return fmt.Errorf("not implemented")
+}
+
+// ListActivity returns recent activity.
+func (a *RemoteMCPAdapter) ListActivity(limit int) []mcp.ActivityEntry {
+	// Activity is in the ledger - for now return empty
+	return []mcp.ActivityEntry{}
+}
+
+// GetQueueStatus returns queue status via RPC.
+func (a *RemoteMCPAdapter) GetQueueStatus() *protocol.QueueStatusResult {
+	resp, err := a.client.Call(protocol.MethodQueueStatus, nil)
+	if err != nil || resp.Error != nil {
+		return nil
+	}
+	var status protocol.QueueStatusResult
+	json.Unmarshal(resp.Result, &status)
+	return &status
+}
+
+// ListTerritories returns territories via RPC.
+func (a *RemoteMCPAdapter) ListTerritories() []mcp.TerritoryInfo {
+	resp, err := a.client.Call(protocol.MethodTerritoryList, nil)
+	if err != nil || resp.Error != nil {
+		return nil
+	}
+	var result struct {
+		Territories []struct {
+			Path       string `json:"path"`
+			RepoRoot   string `json:"repo_root"`
+			BaseBranch string `json:"base_branch"`
+		} `json:"territories"`
+	}
+	json.Unmarshal(resp.Result, &result)
+
+	territories := make([]mcp.TerritoryInfo, 0, len(result.Territories))
+	for _, t := range result.Territories {
+		territories = append(territories, mcp.TerritoryInfo{
+			Path:       t.Path,
+			BaseBranch: t.BaseBranch,
+		})
+	}
+	return territories
+}
+
+// ListOperations returns operations via RPC.
+func (a *RemoteMCPAdapter) ListOperations() []protocol.OperationInfo {
+	resp, err := a.client.Call(protocol.MethodOperationList, nil)
+	if err != nil || resp.Error != nil {
+		return nil
+	}
+	var result protocol.OperationListResult
+	json.Unmarshal(resp.Result, &result)
+	return result.Operations
+}
+
+// GetCosts returns cost summary via RPC.
+func (a *RemoteMCPAdapter) GetCosts() *mcp.CostSummary {
+	// Get status which includes cost info
+	resp, err := a.client.Call(protocol.MethodStatus, nil)
+	if err != nil || resp.Error != nil {
+		return nil
+	}
+	var status protocol.StatusResult
+	json.Unmarshal(resp.Result, &status)
+
+	return &mcp.CostSummary{
+		TotalCost:   status.TotalCost,
+		TotalTokens: status.TotalTokens,
 	}
 }

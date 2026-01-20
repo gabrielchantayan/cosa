@@ -19,6 +19,7 @@ type Client struct {
 	maxTurns  int
 	sessionID string
 	workdir   string
+	mcpConfig string // Path to MCP config file
 
 	cmd    *exec.Cmd
 	stdin  io.WriteCloser
@@ -33,10 +34,11 @@ type Client struct {
 
 // ClientConfig configures a Claude client.
 type ClientConfig struct {
-	Binary   string
-	Model    string
-	MaxTurns int
-	Workdir  string
+	Binary    string
+	Model     string
+	MaxTurns  int
+	Workdir   string
+	MCPConfig string // Path to MCP config file (optional)
 }
 
 // NewClient creates a new Claude Code client.
@@ -49,12 +51,13 @@ func NewClient(cfg ClientConfig) *Client {
 	}
 
 	return &Client{
-		binary:   cfg.Binary,
-		model:    cfg.Model,
-		maxTurns: cfg.MaxTurns,
-		workdir:  cfg.Workdir,
-		events:   make(chan Event, 100),
-		done:     make(chan struct{}),
+		binary:    cfg.Binary,
+		model:     cfg.Model,
+		maxTurns:  cfg.MaxTurns,
+		workdir:   cfg.Workdir,
+		mcpConfig: cfg.MCPConfig,
+		events:    make(chan Event, 100),
+		done:      make(chan struct{}),
 	}
 }
 
@@ -185,6 +188,10 @@ func (c *Client) buildArgs(prompt string) []string {
 
 	if c.sessionID != "" {
 		args = append(args, "--resume", c.sessionID)
+	}
+
+	if c.mcpConfig != "" {
+		args = append(args, "--mcp-config", c.mcpConfig)
 	}
 
 	args = append(args, "-p", prompt)
