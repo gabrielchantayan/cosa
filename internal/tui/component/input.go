@@ -156,6 +156,7 @@ func (i *Input) HandleKey(key string) {
 }
 
 // wrapText wraps text to fit within the given width, returning lines.
+// It performs word-aware wrapping to avoid cutting words in the middle.
 func wrapText(text string, width int) []string {
 	if width <= 0 || text == "" {
 		return []string{text}
@@ -171,8 +172,27 @@ func wrapText(text string, width int) []string {
 			lines = append(lines, string(runes[start:]))
 			break
 		}
-		lines = append(lines, string(runes[start:end]))
-		start = end
+
+		// Look for a space to break at (word boundary)
+		breakAt := end
+		foundSpace := false
+		for i := end; i > start; i-- {
+			if runes[i] == ' ' {
+				breakAt = i
+				foundSpace = true
+				break
+			}
+		}
+
+		if foundSpace {
+			// Break at the space, don't include the space in the line
+			lines = append(lines, string(runes[start:breakAt]))
+			start = breakAt + 1 // Skip the space
+		} else {
+			// No space found - word is longer than width, must break mid-word
+			lines = append(lines, string(runes[start:end]))
+			start = end
+		}
 	}
 
 	if len(lines) == 0 {

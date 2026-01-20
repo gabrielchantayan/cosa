@@ -14,6 +14,9 @@ import (
 	"cosa/internal/tui/theme"
 )
 
+// ForcedBackground is the hardcoded background color for the TUI.
+const ForcedBackground = lipgloss.Color("#0a0a0a")
+
 // FocusArea represents which panel is focused.
 type FocusArea int
 
@@ -233,9 +236,9 @@ func (d *Dashboard) View() string {
 	// Combine all sections vertically
 	result := lipgloss.JoinVertical(lipgloss.Left, header, content, footer)
 
-	// Base view
+	// Base view with forced background color
 	baseView := lipgloss.NewStyle().
-		Background(t.Background).
+		Background(ForcedBackground).
 		Width(d.width).
 		Height(d.height).
 		Render(result)
@@ -249,8 +252,6 @@ func (d *Dashboard) View() string {
 }
 
 func (d *Dashboard) renderWithDialogOverlay(baseView string) string {
-	t := theme.Current
-
 	// Get dialog view centered in the screen
 	dialogView := d.newJobDialog.CenterIn(d.width, d.height)
 
@@ -277,7 +278,7 @@ func (d *Dashboard) renderWithDialogOverlay(baseView string) string {
 	}
 
 	return lipgloss.NewStyle().
-		Background(t.Background).
+		Background(ForcedBackground).
 		Render(strings.Join(result, "\n"))
 }
 
@@ -470,7 +471,7 @@ func (d *Dashboard) ShowNewJobDialog() {
 	d.newJobDialog.SetInput("Job Description:")
 	d.newJobDialog.AddButton("Create", "create", true)
 	d.newJobDialog.AddButton("Cancel", "cancel", false)
-	d.newJobDialog.SetSize(70, 12)
+	d.newJobDialog.SetSize(86, 12)
 	d.newJobDialog.Show()
 }
 
