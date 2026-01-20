@@ -297,14 +297,28 @@ func (d *Dashboard) renderPanel(title, content string, width, height int, focuse
 		Height(height - 2).
 		Render(paddedContent)
 
-	// Add title to top border
+	// Add title to top border by reconstructing it
+	// We rebuild rather than slice because the border contains ANSI escape codes
 	lines := strings.Split(panel, "\n")
 	if len(lines) > 0 {
-		firstLine := lines[0]
-		// Replace part of the top border with the title
 		titleWidth := lipgloss.Width(titleStr)
-		if len(firstLine) > titleWidth+4 {
-			lines[0] = firstLine[:2] + titleStr + firstLine[2+titleWidth:]
+		firstLineWidth := lipgloss.Width(lines[0])
+		if firstLineWidth > titleWidth+4 {
+			// Determine border color based on focus
+			var borderColor lipgloss.Color
+			if focused {
+				borderColor = t.BorderActive
+			} else {
+				borderColor = t.Border
+			}
+			borderStyle := lipgloss.NewStyle().Foreground(borderColor)
+
+			// Reconstruct: corner + dash + title + remaining dashes + corner
+			remainingWidth := width - 2 - 1 - titleWidth - 1
+			if remainingWidth < 0 {
+				remainingWidth = 0
+			}
+			lines[0] = borderStyle.Render("╭─") + titleStr + borderStyle.Render(strings.Repeat("─", remainingWidth)+"╮")
 		}
 	}
 
