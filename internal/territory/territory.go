@@ -165,10 +165,14 @@ func (t *Territory) RemoveWorkerWorktree(workerName string, force bool) error {
 }
 
 // MergeTargetBranch returns the branch where workers should merge their work.
-// Returns DevBranch if configured, otherwise BaseBranch.
-func (t *Territory) MergeTargetBranch() string {
+// Returns DevBranch if configured, otherwise the globalDefault if provided,
+// otherwise BaseBranch.
+func (t *Territory) MergeTargetBranch(globalDefault ...string) string {
 	if t.Config.DevBranch != "" {
 		return t.Config.DevBranch
+	}
+	if len(globalDefault) > 0 && globalDefault[0] != "" {
+		return globalDefault[0]
 	}
 	return t.BaseBranch
 }

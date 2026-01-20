@@ -28,6 +28,9 @@ type Config struct {
 	// Workers contains worker defaults.
 	Workers WorkerConfig `yaml:"workers"`
 
+	// Git contains git-related configuration.
+	Git GitConfig `yaml:"git"`
+
 	// TUI contains TUI configuration.
 	TUI TUIConfig `yaml:"tui"`
 
@@ -57,6 +60,14 @@ type WorkerConfig struct {
 
 	// DefaultRole for new workers.
 	DefaultRole string `yaml:"default_role"`
+}
+
+// GitConfig contains git-related configuration.
+type GitConfig struct {
+	// DefaultMergeBranch is the default branch where workers merge their work.
+	// This serves as a global default when a territory doesn't have a DevBranch configured.
+	// Common values: main, master, staging, dev, develop
+	DefaultMergeBranch string `yaml:"default_merge_branch"`
 }
 
 // TUIConfig contains TUI settings.
@@ -155,6 +166,9 @@ func DefaultConfig() *Config {
 		Workers: WorkerConfig{
 			MaxConcurrent: 5,
 			DefaultRole:   "soldato",
+		},
+		Git: GitConfig{
+			DefaultMergeBranch: "", // Empty means use repository's default branch
 		},
 		TUI: TUIConfig{
 			Theme:       "noir",

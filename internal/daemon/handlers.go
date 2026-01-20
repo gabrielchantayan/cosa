@@ -69,7 +69,7 @@ func (s *Server) handleTerritoryStatus(req *protocol.Request) *protocol.Response
 		"repo_root":           t.RepoRoot,
 		"base_branch":         t.BaseBranch,
 		"dev_branch":          t.Config.DevBranch,
-		"merge_target_branch": t.MergeTargetBranch(),
+		"merge_target_branch": t.MergeTargetBranch(s.cfg.Git.DefaultMergeBranch),
 	})
 	return resp
 }
@@ -166,7 +166,7 @@ func (s *Server) handleTerritorySetDevBranch(req *protocol.Request) *protocol.Re
 
 	resp, _ := protocol.NewResponse(req.ID, protocol.TerritorySetDevBranchResult{
 		DevBranch:         t.Config.DevBranch,
-		MergeTargetBranch: t.MergeTargetBranch(),
+		MergeTargetBranch: t.MergeTargetBranch(s.cfg.Git.DefaultMergeBranch),
 	})
 	return resp
 }
@@ -233,7 +233,7 @@ func (s *Server) handleWorkerAdd(req *protocol.Request) *protocol.Response {
 		},
 		OnJobComplete:     s.onJobComplete,
 		OnJobFail:         s.onJobFail,
-		MergeTargetBranch: t.MergeTargetBranch(),
+		MergeTargetBranch: t.MergeTargetBranch(s.cfg.Git.DefaultMergeBranch),
 	})
 
 	// Restore session ID if available
