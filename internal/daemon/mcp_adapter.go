@@ -246,8 +246,10 @@ func (a *MCPAdapter) GetCosts() *mcp.CostSummary {
 		}
 	}
 
-	// Calculate approximate total cost from tokens
-	// Assuming Claude pricing of ~$15/MTok for output
+	// Calculate approximate total cost from tokens.
+	// NOTE: This is an approximation assuming Claude Sonnet pricing of ~$15/MTok for output.
+	// Actual costs depend on the model used and current Anthropic pricing.
+	// This should be replaced with actual cost tracking from Claude responses.
 	totalCost := fmt.Sprintf("$%.2f", float64(totalTokens)/1000000*15)
 
 	return &mcp.CostSummary{

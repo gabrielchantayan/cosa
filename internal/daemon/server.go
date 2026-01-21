@@ -349,6 +349,8 @@ func (s *Server) handleRequest(req *protocol.Request, conn net.Conn) *protocol.R
 		return s.handleJobStatus(req)
 	case protocol.MethodJobAssign:
 		return s.handleJobAssign(req)
+	case protocol.MethodJobSetPriority:
+		return s.handleJobSetPriority(req)
 	case protocol.MethodQueueStatus:
 		return s.handleQueueStatus(req)
 	case protocol.MethodReviewStart:

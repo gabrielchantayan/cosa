@@ -38,9 +38,9 @@ func NewDecisionHandler(cfg DecisionHandlerConfig) *DecisionHandler {
 }
 
 // HandleApproval handles an approved review by merging the changes.
-func (d *DecisionHandler) HandleApproval(ctx context.Context, j *job.Job, result *ReviewResult) error {
-	// Get the worker branch from the job
-	workerBranch := fmt.Sprintf("cosa/%s", getWorkerNameFromJob(j))
+func (d *DecisionHandler) HandleApproval(ctx context.Context, j *job.Job, w *worker.Worker, result *ReviewResult) error {
+	// Get the worker branch from the worker name
+	workerBranch := fmt.Sprintf("cosa/%s", w.Name)
 
 	// Log merge started
 	d.ledger.Append(ledger.EventMergeStarted, ledger.MergeEventData{
@@ -150,12 +150,3 @@ func buildRevisionFeedback(originalJob *job.Job, result *ReviewResult) string {
 	return sb.String()
 }
 
-// getWorkerNameFromJob extracts the worker name from job metadata.
-// This is a helper that assumes the worker ID follows the pattern.
-func getWorkerNameFromJob(j *job.Job) string {
-	// The worker field contains the worker ID
-	// Worker branches are named cosa/<worker-name>
-	// We need to look up the worker name, but for now we'll use the worker ID
-	// The coordinator will provide the actual worker name
-	return j.Worker
-}

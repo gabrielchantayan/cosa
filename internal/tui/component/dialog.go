@@ -17,10 +17,15 @@ type Dialog struct {
 	height  int
 	visible bool
 
-	// Input field
+	// Input field (single line)
 	input       *Input
 	hasInput    bool
 	inputLabel  string
+
+	// Text area (multi-line with word wrap)
+	textArea     *TextArea
+	hasTextArea  bool
+	textAreaLabel string
 
 	// Buttons
 	buttons        []DialogButton
@@ -49,6 +54,9 @@ func (d *Dialog) SetSize(width, height int) {
 	if d.input != nil {
 		d.input.SetWidth(width - 8)
 	}
+	if d.textArea != nil {
+		d.textArea.SetSize(width-8, height-10)
+	}
 }
 
 // SetContent sets the dialog content.
@@ -67,6 +75,15 @@ func (d *Dialog) SetInput(label string) {
 	d.input.Focus()
 }
 
+// SetTextArea enables multi-line text area mode with a label and word wrapping.
+func (d *Dialog) SetTextArea(label string) {
+	d.hasTextArea = true
+	d.textAreaLabel = label
+	d.textArea = NewTextArea()
+	d.textArea.SetSize(d.width-8, d.height-10)
+	d.textArea.Focus()
+}
+
 // AddButton adds a button to the dialog.
 func (d *Dialog) AddButton(label, action string, primary bool) {
 	d.buttons = append(d.buttons, DialogButton{
@@ -82,6 +99,9 @@ func (d *Dialog) Show() {
 	if d.input != nil {
 		d.input.Focus()
 	}
+	if d.textArea != nil {
+		d.textArea.Focus()
+	}
 }
 
 // Hide hides the dialog.
@@ -89,6 +109,9 @@ func (d *Dialog) Hide() {
 	d.visible = false
 	if d.input != nil {
 		d.input.Reset()
+	}
+	if d.textArea != nil {
+		d.textArea.Reset()
 	}
 }
 
@@ -99,6 +122,9 @@ func (d *Dialog) Visible() bool {
 
 // GetInputValue returns the current input value.
 func (d *Dialog) GetInputValue() string {
+	if d.textArea != nil {
+		return d.textArea.Value()
+	}
 	if d.input != nil {
 		return d.input.Value()
 	}
@@ -115,6 +141,57 @@ func (d *Dialog) SelectedAction() string {
 
 // HandleKey handles key presses.
 func (d *Dialog) HandleKey(key string) string {
+	// Handle text area input
+	if d.hasTextArea && d.textArea != nil {
+		switch key {
+		case "tab":
+			// Move focus from text area to buttons
+			if d.textArea.Focused() && len(d.buttons) > 0 {
+				d.textArea.Blur()
+				d.selectedButton = 0
+			} else if !d.textArea.Focused() {
+				d.textArea.Focus()
+				d.selectedButton = -1
+			}
+			return ""
+		case "ctrl+enter":
+			// Submit with first primary button (use ctrl+enter for text areas since enter adds newlines)
+			for _, btn := range d.buttons {
+				if btn.Primary {
+					return btn.Action
+				}
+			}
+			if len(d.buttons) > 0 {
+				return d.buttons[0].Action
+			}
+			return ""
+		case "left":
+			if !d.textArea.Focused() && d.selectedButton > 0 {
+				d.selectedButton--
+			} else if d.textArea.Focused() {
+				d.textArea.HandleKey(key)
+			}
+			return ""
+		case "right":
+			if !d.textArea.Focused() && d.selectedButton < len(d.buttons)-1 {
+				d.selectedButton++
+			} else if d.textArea.Focused() {
+				d.textArea.HandleKey(key)
+			}
+			return ""
+		case "esc":
+			return "cancel"
+		default:
+			if d.textArea.Focused() {
+				d.textArea.HandleKey(key)
+			} else if key == "enter" && d.selectedButton >= 0 {
+				return d.buttons[d.selectedButton].Action
+			}
+			return ""
+		}
+	}
+
+	// Handle single-line input
 	if d.hasInput && d.input != nil {
 		switch key {
 		case "tab":
@@ -220,7 +297,19 @@ func (d *Dialog) View() string {
 		sections = append(sections, contentStyle.Render(d.content))
 	}
 
-	// Input field
+	// Text area (multi-line with word wrap)
+	if d.hasTextArea && d.textArea != nil {
+		labelStyle := lipgloss.NewStyle().
+			Foreground(t.TextMuted).
+			Padding(0, 2)
+		textAreaSection := lipgloss.JoinVertical(lipgloss.Left,
+			labelStyle.Render(d.textAreaLabel),
+			"  "+d.textArea.View(),
+		)
+		sections = append(sections, textAreaSection)
+	}
+
+	// Input field (single-line)
 	if d.hasInput && d.input != nil {
 		labelStyle := lipgloss.NewStyle().
 			Foreground(t.TextMuted).
@@ -308,4 +397,16 @@ func (d *Dialog) CenterIn(screenWidth, screenHeight int) string {
 		PaddingLeft(padLeft).
 		PaddingTop(padTop).
 		Render(dialog)
+}
+
+// NewJobDialog creates a dialog configured for entering a new job description.
+// The dialog is 86 characters wide (16 chars wider than the original 70) with
+// a multi-line text area that uses word wrapping to avoid cutting off words.
+func NewJobDialog() *Dialog {
+	d := NewDialog("New Job")
+	d.SetSize(86, 16)
+	d.SetTextArea("Job Description (Ctrl+Enter to submit):")
+	d.AddButton("Create", "create", true)
+	d.AddButton("Cancel", "cancel", false)
+	return d
 }

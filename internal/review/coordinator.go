@@ -195,7 +195,7 @@ func (c *Coordinator) runReviewFlow(ctx context.Context, j *job.Job, w *worker.W
 	c.updatePhase(status, PhaseDecision)
 
 	if reviewResult.Decision == DecisionApproved {
-		if err := c.decisionHandler.HandleApproval(ctx, j, reviewResult); err != nil {
+		if err := c.decisionHandler.HandleApproval(ctx, j, w, reviewResult); err != nil {
 			c.handleReviewError(j, status, fmt.Sprintf("merge failed: %v", err))
 			return
 		}

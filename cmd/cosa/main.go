@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -753,8 +754,8 @@ func jobAddCmd() *cobra.Command {
 
 func jobListCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "list",
-		Short: "List all jobs",
+		Use:     "list",
+		Short:   "List all jobs",
 		Aliases: []string{"ls"},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client, err := daemon.Connect(cfg.SocketPath)
@@ -780,13 +781,20 @@ func jobListCmd() *cobra.Command {
 				return nil
 			}
 
-			fmt.Printf("%-10s %-12s %-4s %-40s\n", "ID", "STATUS", "PRI", "DESCRIPTION")
+			// Sort jobs by CreatedAt timestamp (newest first)
+			sort.Slice(jobs, func(i, j int) bool {
+				return jobs[i].CreatedAt > jobs[j].CreatedAt
+			})
+
+			fmt.Printf("%-10s %-12s %-4s %-20s %-30s\n", "ID", "STATUS", "PRI", "CREATED", "DESCRIPTION")
 			for _, j := range jobs {
 				desc := j.Description
-				if len(desc) > 38 {
-					desc = desc[:38] + ".."
+				if len(desc) > 28 {
+					desc = desc[:28] + ".."
 				}
-				fmt.Printf("%-10s %-12s %-4d %-40s\n", j.ID[:8], j.Status, j.Priority, desc)
+				// Convert Unix timestamp to local time
+				created := time.Unix(j.CreatedAt, 0).Local().Format("2006/01/02 15:04:05")
+				fmt.Printf("%-10s %-12s %-4d %-20s %-30s\n", j.ID[:8], j.Status, j.Priority, created, desc)
 			}
 
 			return nil
@@ -2114,7 +2122,9 @@ func (a *RemoteMCPAdapter) ListWorkers() []protocol.WorkerInfo {
 		return nil
 	}
 	var workers []protocol.WorkerInfo
-	json.Unmarshal(resp.Result, &workers)
+	if err := json.Unmarshal(resp.Result, &workers); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to parse workers response: %v\n", err)
+	}
 	return workers
 }
 
@@ -2128,7 +2138,9 @@ func (a *RemoteMCPAdapter) GetWorker(name string) (*protocol.WorkerDetailInfo, e
 		return nil, fmt.Errorf("%s", resp.Error.Message)
 	}
 	var worker protocol.WorkerDetailInfo
-	json.Unmarshal(resp.Result, &worker)
+	if err := json.Unmarshal(resp.Result, &worker); err != nil {
+		return nil, fmt.Errorf("failed to parse worker response: %w", err)
+	}
 	return &worker, nil
 }
 
@@ -2139,7 +2151,10 @@ func (a *RemoteMCPAdapter) ListJobs(status string) []protocol.JobInfo {
 		return nil
 	}
 	var jobs []protocol.JobInfo
-	json.Unmarshal(resp.Result, &jobs)
+	if err := json.Unmarshal(resp.Result, &jobs); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to parse jobs response: %v\n", err)
+		return nil
+	}
 
 	// Filter by status if specified
 	if status != "" {
@@ -2164,7 +2179,9 @@ func (a *RemoteMCPAdapter) GetJob(id string) (*protocol.JobInfo, error) {
 		return nil, fmt.Errorf("%s", resp.Error.Message)
 	}
 	var job protocol.JobInfo
-	json.Unmarshal(resp.Result, &job)
+	if err := json.Unmarshal(resp.Result, &job); err != nil {
+		return nil, fmt.Errorf("failed to parse job response: %w", err)
+	}
 	return &job, nil
 }
 
@@ -2182,7 +2199,9 @@ func (a *RemoteMCPAdapter) CreateJob(description string, priority int, territory
 		return nil, fmt.Errorf("%s", resp.Error.Message)
 	}
 	var jobInfo protocol.JobInfo
-	json.Unmarshal(resp.Result, &jobInfo)
+	if err := json.Unmarshal(resp.Result, &jobInfo); err != nil {
+		return nil, fmt.Errorf("failed to parse job response: %w", err)
+	}
 	// Return a minimal job object
 	return &job.Job{
 		ID:          jobInfo.ID,
@@ -2205,8 +2224,17 @@ func (a *RemoteMCPAdapter) CancelJob(id string) error {
 
 // SetJobPriority sets job priority via RPC.
 func (a *RemoteMCPAdapter) SetJobPriority(id string, priority int) error {
-	// Note: This would need a new RPC method - for now, return not implemented
-	return fmt.Errorf("not implemented")
+	resp, err := a.client.Call(protocol.MethodJobSetPriority, protocol.JobSetPriorityParams{
+		JobID:    id,
+		Priority: priority,
+	})
+	if err != nil {
+		return err
+	}
+	if resp.Error != nil {
+		return fmt.Errorf("%s", resp.Error.Message)
+	}
+	return nil
 }
 
 // ListActivity returns recent activity.
@@ -2222,7 +2250,10 @@ func (a *RemoteMCPAdapter) GetQueueStatus() *protocol.QueueStatusResult {
 		return nil
 	}
 	var status protocol.QueueStatusResult
-	json.Unmarshal(resp.Result, &status)
+	if err := json.Unmarshal(resp.Result, &status); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to parse queue status response: %v\n", err)
+		return nil
+	}
 	return &status
 }
 
@@ -2239,7 +2270,10 @@ func (a *RemoteMCPAdapter) ListTerritories() []mcp.TerritoryInfo {
 			BaseBranch string `json:"base_branch"`
 		} `json:"territories"`
 	}
-	json.Unmarshal(resp.Result, &result)
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to parse territories response: %v\n", err)
+		return nil
+	}
 
 	territories := make([]mcp.TerritoryInfo, 0, len(result.Territories))
 	for _, t := range result.Territories {
@@ -2258,7 +2292,10 @@ func (a *RemoteMCPAdapter) ListOperations() []protocol.OperationInfo {
 		return nil
 	}
 	var result protocol.OperationListResult
-	json.Unmarshal(resp.Result, &result)
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to parse operations response: %v\n", err)
+		return nil
+	}
 	return result.Operations
 }
 
@@ -2270,7 +2307,10 @@ func (a *RemoteMCPAdapter) GetCosts() *mcp.CostSummary {
 		return nil
 	}
 	var status protocol.StatusResult
-	json.Unmarshal(resp.Result, &status)
+	if err := json.Unmarshal(resp.Result, &status); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to parse status response: %v\n", err)
+		return nil
+	}
 
 	return &mcp.CostSummary{
 		TotalCost:   status.TotalCost,

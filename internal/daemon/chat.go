@@ -24,6 +24,7 @@ type ChatSession struct {
 	workdir       string
 	mcpConfigPath string // Path to MCP config file
 	cosaBinary    string // Path to cosa binary for MCP server
+	chatTimeout   int    // Timeout in seconds for chat responses
 	messages      []protocol.ChatMessage
 	mu            sync.Mutex
 	ctx           context.Context
@@ -31,17 +32,23 @@ type ChatSession struct {
 }
 
 // newChatSession creates a new chat session with the underboss.
-func newChatSession(cfg claude.ClientConfig, workdir string, cosaBinary string) *ChatSession {
+func newChatSession(cfg claude.ClientConfig, workdir string, cosaBinary string, chatTimeout int) *ChatSession {
 	ctx, cancel := context.WithCancel(context.Background())
 
+	// Default to 120 seconds if not specified
+	if chatTimeout <= 0 {
+		chatTimeout = 120
+	}
+
 	return &ChatSession{
-		ID:         fmt.Sprintf("chat-%d", time.Now().UnixNano()),
-		cfg:        cfg,
-		workdir:    workdir,
-		cosaBinary: cosaBinary,
-		messages:   make([]protocol.ChatMessage, 0),
-		ctx:        ctx,
-		cancel:     cancel,
+		ID:          fmt.Sprintf("chat-%d", time.Now().UnixNano()),
+		cfg:         cfg,
+		workdir:     workdir,
+		cosaBinary:  cosaBinary,
+		chatTimeout: chatTimeout,
+		messages:    make([]protocol.ChatMessage, 0),
+		ctx:         ctx,
+		cancel:      cancel,
 	}
 }
 
@@ -216,7 +223,7 @@ func (cs *ChatSession) sendMessage(prompt, resumeSessionID string) (string, stri
 	var responseBuilder strings.Builder
 	var sessionID string
 
-	timeout := time.After(120 * time.Second)
+	timeout := time.After(time.Duration(cs.chatTimeout) * time.Second)
 
 	for {
 		select {
@@ -327,7 +334,7 @@ func (s *Server) handleChatStart(req *protocol.Request) *protocol.Response {
 		Binary:   s.cfg.Claude.Binary,
 		Model:    s.cfg.Claude.Model,
 		MaxTurns: 1000,
-	}, workdir, cosaBinary)
+	}, workdir, cosaBinary, s.cfg.Claude.ChatTimeout)
 
 	if err := s.chatSession.Start(); err != nil {
 		resp, _ := protocol.NewErrorResponse(req.ID, protocol.InternalError, err.Error(), nil)

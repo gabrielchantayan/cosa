@@ -51,6 +51,9 @@ type ClaudeConfig struct {
 
 	// MaxTurns limits the number of turns per session.
 	MaxTurns int `yaml:"max_turns"`
+
+	// ChatTimeout is the timeout in seconds for chat responses (default: 120).
+	ChatTimeout int `yaml:"chat_timeout"`
 }
 
 // WorkerConfig contains worker defaults.
@@ -160,8 +163,9 @@ func DefaultConfig() *Config {
 		DataDir:    dataDir,
 		LogLevel:   "info",
 		Claude: ClaudeConfig{
-			Binary:   "claude",
-			MaxTurns: 100,
+			Binary:      "claude",
+			MaxTurns:    100,
+			ChatTimeout: 120,
 		},
 		Workers: WorkerConfig{
 			MaxConcurrent: 5,
