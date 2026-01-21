@@ -3,10 +3,31 @@ package worker
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
+
+// sanitizeWorkerDirPath validates the worker name and returns a safe directory path.
+func sanitizeWorkerDirPath(basePath, workerName string) (string, error) {
+	if err := ValidateWorkerName(workerName); err != nil {
+		return "", err
+	}
+
+	// Construct the path and verify it stays within basePath
+	fullPath := filepath.Join(basePath, workerName)
+	cleanPath := filepath.Clean(fullPath)
+
+	// Verify the path is still under basePath
+	cleanBase := filepath.Clean(basePath)
+	if !strings.HasPrefix(cleanPath, cleanBase+string(filepath.Separator)) && cleanPath != cleanBase {
+		return "", fmt.Errorf("%w: path escapes base directory", ErrInvalidWorkerName)
+	}
+
+	return cleanPath, nil
+}
 
 // HandoffSummary contains a summary of a worker's current state for handoff.
 type HandoffSummary struct {
@@ -86,7 +107,11 @@ func (w *Worker) InjectHandoffContext(summary *HandoffSummary) {
 
 // SaveHandoffSummary persists a handoff summary to disk.
 func SaveHandoffSummary(sessionsDir, workerName string, summary *HandoffSummary) error {
-	dir := filepath.Join(sessionsDir, workerName)
+	dir, err := sanitizeWorkerDirPath(sessionsDir, workerName)
+	if err != nil {
+		return fmt.Errorf("invalid worker name: %w", err)
+	}
+
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
 	}
@@ -102,7 +127,12 @@ func SaveHandoffSummary(sessionsDir, workerName string, summary *HandoffSummary)
 
 // LoadHandoffSummary loads a handoff summary from disk.
 func LoadHandoffSummary(sessionsDir, workerName string) (*HandoffSummary, error) {
-	path := filepath.Join(sessionsDir, workerName, "handoff.json")
+	dir, err := sanitizeWorkerDirPath(sessionsDir, workerName)
+	if err != nil {
+		return nil, fmt.Errorf("invalid worker name: %w", err)
+	}
+
+	path := filepath.Join(dir, "handoff.json")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -140,13 +170,21 @@ func (s *HandoffStore) Load(workerName string) (*HandoffSummary, error) {
 
 // Exists checks if a handoff summary exists for a worker.
 func (s *HandoffStore) Exists(workerName string) bool {
-	path := filepath.Join(s.sessionsDir, workerName, "handoff.json")
-	_, err := os.Stat(path)
+	dir, err := sanitizeWorkerDirPath(s.sessionsDir, workerName)
+	if err != nil {
+		return false
+	}
+	path := filepath.Join(dir, "handoff.json")
+	_, err = os.Stat(path)
 	return err == nil
 }
 
 // Delete removes a handoff summary for a worker.
 func (s *HandoffStore) Delete(workerName string) error {
-	path := filepath.Join(s.sessionsDir, workerName, "handoff.json")
+	dir, err := sanitizeWorkerDirPath(s.sessionsDir, workerName)
+	if err != nil {
+		return fmt.Errorf("invalid worker name: %w", err)
+	}
+	path := filepath.Join(dir, "handoff.json")
 	return os.Remove(path)
 }

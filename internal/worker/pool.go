@@ -2,13 +2,63 @@ package worker
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"sync"
 
 	"cosa/internal/job"
 )
+
+// ErrInvalidWorkerName is returned when a worker name contains invalid characters.
+var ErrInvalidWorkerName = errors.New("invalid worker name")
+
+// validWorkerNameRegex matches valid worker names: alphanumeric, hyphens, underscores.
+// Must start with alphanumeric, 1-64 characters total.
+var validWorkerNameRegex = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$`)
+
+// ValidateWorkerName checks if a worker name is valid and safe for use in file paths.
+// Valid names contain only alphanumeric characters, hyphens, and underscores,
+// must start with an alphanumeric character, and be 1-64 characters long.
+func ValidateWorkerName(name string) error {
+	if name == "" {
+		return fmt.Errorf("%w: name cannot be empty", ErrInvalidWorkerName)
+	}
+
+	// Check for path traversal attempts
+	if strings.Contains(name, "..") || strings.Contains(name, "/") || strings.Contains(name, "\\") {
+		return fmt.Errorf("%w: name contains path traversal characters", ErrInvalidWorkerName)
+	}
+
+	// Check against regex pattern
+	if !validWorkerNameRegex.MatchString(name) {
+		return fmt.Errorf("%w: name must be 1-64 characters, start with alphanumeric, and contain only alphanumeric, hyphens, or underscores", ErrInvalidWorkerName)
+	}
+
+	return nil
+}
+
+// sanitizeWorkerNameForPath ensures the worker name is safe for file path construction.
+// Returns an error if the name is invalid.
+func sanitizeWorkerNameForPath(basePath, name string) (string, error) {
+	if err := ValidateWorkerName(name); err != nil {
+		return "", err
+	}
+
+	// Construct the path and verify it stays within basePath
+	fullPath := filepath.Join(basePath, name+".json")
+	cleanPath := filepath.Clean(fullPath)
+
+	// Verify the path is still under basePath
+	if !strings.HasPrefix(cleanPath, filepath.Clean(basePath)+string(filepath.Separator)) {
+		return "", fmt.Errorf("%w: path escapes base directory", ErrInvalidWorkerName)
+	}
+
+	return cleanPath, nil
+}
 
 // WorkerInfo contains the persistent worker metadata.
 type WorkerInfo struct {
@@ -79,6 +129,11 @@ func (p *Pool) ClearPending() {
 
 // Add adds a worker to the pool.
 func (p *Pool) Add(w *Worker) error {
+	// Validate worker name before adding
+	if err := ValidateWorkerName(w.Name); err != nil {
+		return fmt.Errorf("cannot add worker: %w", err)
+	}
+
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -90,7 +145,17 @@ func (p *Pool) Add(w *Worker) error {
 	p.byRole[w.Role] = append(p.byRole[w.Role], w)
 
 	if p.path != "" {
-		p.saveWorker(w)
+		if err := p.saveWorker(w); err != nil {
+			// Rollback on save failure
+			delete(p.workers, w.Name)
+			for i, worker := range p.byRole[w.Role] {
+				if worker.Name == w.Name {
+					p.byRole[w.Role] = append(p.byRole[w.Role][:i], p.byRole[w.Role][i+1:]...)
+					break
+				}
+			}
+			return fmt.Errorf("failed to persist worker: %w", err)
+		}
 	}
 
 	return nil
@@ -118,7 +183,9 @@ func (p *Pool) Remove(name string) (*Worker, error) {
 	}
 
 	if p.path != "" {
-		os.Remove(p.workerFilePath(name))
+		if filePath, err := p.workerFilePath(name); err == nil {
+			os.Remove(filePath)
+		}
 	}
 
 	return w, nil
@@ -297,8 +364,8 @@ func (p *Pool) Save(w *Worker) error {
 
 // Persistence helpers
 
-func (p *Pool) workerFilePath(name string) string {
-	return filepath.Join(p.path, name+".json")
+func (p *Pool) workerFilePath(name string) (string, error) {
+	return sanitizeWorkerNameForPath(p.path, name)
 }
 
 func (p *Pool) saveWorker(w *Worker) error {
@@ -314,11 +381,16 @@ func (p *Pool) saveWorker(w *Worker) error {
 		JobsFailed:     w.JobsFailed,
 	}
 
+	filePath, err := p.workerFilePath(w.Name)
+	if err != nil {
+		return fmt.Errorf("invalid worker name for persistence: %w", err)
+	}
+
 	data, err := json.MarshalIndent(info, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(p.workerFilePath(w.Name), data, 0644)
+	return os.WriteFile(filePath, data, 0644)
 }
 
 func (p *Pool) loadAll() error {
