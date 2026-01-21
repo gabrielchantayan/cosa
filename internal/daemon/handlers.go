@@ -538,6 +538,91 @@ func (s *Server) handleJobAssign(req *protocol.Request) *protocol.Response {
 	return resp
 }
 
+func (s *Server) handleJobReassign(req *protocol.Request) *protocol.Response {
+	var params protocol.JobReassignParams
+	if req.Params != nil {
+		json.Unmarshal(req.Params, &params)
+	}
+
+	if params.JobID == "" {
+		resp, _ := protocol.NewErrorResponse(req.ID, protocol.InvalidParams, "job_id is required", nil)
+		return resp
+	}
+
+	j, exists := s.jobs.Get(params.JobID)
+	if !exists {
+		resp, _ := protocol.NewErrorResponse(req.ID, protocol.ErrJobNotFound, "job not found", nil)
+		return resp
+	}
+
+	// Reset the job to pending state
+	if err := j.Reset(); err != nil {
+		resp, _ := protocol.NewErrorResponse(req.ID, protocol.ErrInvalidState, err.Error(), nil)
+		return resp
+	}
+
+	// Log the reassignment
+	s.ledger.Append(ledger.EventType("job.reassigned"), ledger.JobEventData{
+		ID:          j.ID,
+		Description: j.Description,
+	})
+
+	// If a specific worker is specified, try to assign directly
+	if params.WorkerID != "" {
+		w, exists := s.pool.GetByID(params.WorkerID)
+		if !exists {
+			w, exists = s.pool.Get(params.WorkerID)
+		}
+		if !exists {
+			resp, _ := protocol.NewErrorResponse(req.ID, protocol.ErrWorkerNotFound, "worker not found", nil)
+			return resp
+		}
+
+		if w.GetStatus() == worker.StatusIdle {
+			j.Queue()
+			s.jobs.Save(j)
+			s.ledger.Append(ledger.EventJobQueued, ledger.JobEventData{
+				ID:          j.ID,
+				Description: j.Description,
+				Worker:      w.ID,
+				WorkerName:  w.Name,
+			})
+
+			go func() {
+				s.ledger.Append(ledger.EventJobStarted, ledger.JobEventData{
+					ID:          j.ID,
+					Description: j.Description,
+					Worker:      w.ID,
+					WorkerName:  w.Name,
+				})
+				if err := w.Execute(j); err != nil {
+					s.ledger.Append(ledger.EventJobFailed, ledger.JobEventData{
+						ID:          j.ID,
+						Description: j.Description,
+						Worker:      w.ID,
+						WorkerName:  w.Name,
+						Error:       err.Error(),
+					})
+				}
+			}()
+
+			resp, _ := protocol.NewResponse(req.ID, map[string]string{
+				"status": "reassigned",
+				"worker": w.Name,
+			})
+			return resp
+		}
+		// Worker not idle, fall through to queue
+	}
+
+	// No worker specified or worker not available, add to queue for scheduler
+	s.queue.Enqueue(j)
+	s.jobs.Save(j)
+
+	resp, _ := protocol.NewResponse(req.ID, map[string]string{"status": "requeued"})
+	return resp
+}
+
 func (s *Server) handleWorkerStatus(req *protocol.Request) *protocol.Response {
 	var params struct {
 		Name string `json:"name"`
