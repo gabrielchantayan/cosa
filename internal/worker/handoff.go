@@ -97,7 +97,7 @@ func SaveHandoffSummary(sessionsDir, workerName string, summary *HandoffSummary)
 		return err
 	}
 
-	return os.WriteFile(path, data, 0644)
+	return os.WriteFile(path, data, 0600)
 }
 
 // LoadHandoffSummary loads a handoff summary from disk.

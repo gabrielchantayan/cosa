@@ -318,7 +318,7 @@ func (p *Pool) saveWorker(w *Worker) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(p.workerFilePath(w.Name), data, 0644)
+	return os.WriteFile(p.workerFilePath(w.Name), data, 0600)
 }
 
 func (p *Pool) loadAll() error {

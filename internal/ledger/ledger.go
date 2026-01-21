@@ -86,7 +86,7 @@ type Ledger struct {
 
 // Open opens or creates a ledger at the given path.
 func Open(path string) (*Ledger, error) {
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
 	if err != nil {
 		return nil, err
 	}
