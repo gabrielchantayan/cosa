@@ -183,6 +183,8 @@ func (w *Worker) Execute(j *job.Job) error {
 
 // ExecuteInWorktree runs a job on this worker in the specified worktree.
 // If worktreePath is empty, uses the worker's default worktree.
+// When a custom worktreePath is provided, a fresh session is always started
+// (not resumed) since each job worktree should have its own isolated session.
 func (w *Worker) ExecuteInWorktree(j *job.Job, worktreePath string) error {
 	w.mu.Lock()
 	if w.Status != StatusIdle {
@@ -192,19 +194,15 @@ func (w *Worker) ExecuteInWorktree(j *job.Job, worktreePath string) error {
 	w.Status = StatusWorking
 	w.CurrentJob = j
 
-	// Determine the working directory
+	// Determine the working directory and whether to use job-specific worktree
 	workdir := w.Worktree
-	if worktreePath != "" {
+	useJobWorktree := worktreePath != ""
+	if useJobWorktree {
 		workdir = worktreePath
 	}
 
-	// Create a new client configured for this job's worktree
-	jobClient := claude.NewClient(claude.ClientConfig{
-		Binary:   w.client.Binary(),
-		Model:    w.client.Model(),
-		MaxTurns: w.client.MaxTurns(),
-		Workdir:  workdir,
-	})
+	// Create a new client configured for this worktree
+	jobClient := claude.NewClient(w.client.CloneConfig(workdir))
 	w.mu.Unlock()
 
 	w.emitEvent("job_started", fmt.Sprintf("Starting job: %s (worktree: %s)", j.Description, workdir))
@@ -213,8 +211,10 @@ func (w *Worker) ExecuteInWorktree(j *job.Job, worktreePath string) error {
 	prompt := w.buildPrompt(j)
 
 	// Start or resume Claude session
+	// For job-specific worktrees, always start fresh (don't resume old sessions)
+	// For the worker's default worktree, resume if we have a session ID
 	var err error
-	if w.SessionID != "" {
+	if !useJobWorktree && w.SessionID != "" {
 		err = jobClient.Resume(w.ctx, w.SessionID, prompt)
 	} else {
 		err = jobClient.Start(w.ctx, prompt)

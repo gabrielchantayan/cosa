@@ -76,19 +76,17 @@ func (c *Client) SessionID() string {
 	return c.sessionID
 }
 
-// Binary returns the claude binary path.
-func (c *Client) Binary() string {
-	return c.binary
-}
-
-// Model returns the model name.
-func (c *Client) Model() string {
-	return c.model
-}
-
-// MaxTurns returns the max turns setting.
-func (c *Client) MaxTurns() int {
-	return c.maxTurns
+// CloneConfig returns a new ClientConfig based on this client's settings,
+// with the workdir optionally overridden. This is useful for creating
+// a new client with the same settings but a different working directory.
+func (c *Client) CloneConfig(workdir string) ClientConfig {
+	return ClientConfig{
+		Binary:    c.binary,
+		Model:     c.model,
+		MaxTurns:  c.maxTurns,
+		Workdir:   workdir,
+		MCPConfig: c.mcpConfig,
+	}
 }
 
 // Start begins a new Claude session with the given prompt.

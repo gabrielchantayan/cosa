@@ -585,38 +585,8 @@ func (sched *scheduler) processQueue() {
 			WorkerName:  w.Name,
 		})
 
-		// Execute in goroutine
-		go func(w *worker.Worker, j *job.Job) {
-			// Create job worktree before starting
-			if err := sched.server.createJobWorktree(j); err != nil {
-				sched.ledger.Append(ledger.EventJobFailed, ledger.JobEventData{
-					ID:          j.ID,
-					Description: j.Description,
-					Worker:      w.ID,
-					WorkerName:  w.Name,
-					Error:       fmt.Sprintf("failed to create job worktree: %v", err),
-				})
-				j.Fail(fmt.Sprintf("failed to create job worktree: %v", err))
-				sched.jobs.Save(j)
-				return
-			}
-
-			sched.ledger.Append(ledger.EventJobStarted, ledger.JobEventData{
-				ID:          j.ID,
-				Description: j.Description,
-				Worker:      w.ID,
-				WorkerName:  w.Name,
-			})
-			if err := w.ExecuteInWorktree(j, j.GetWorktree()); err != nil {
-				sched.ledger.Append(ledger.EventJobFailed, ledger.JobEventData{
-					ID:          j.ID,
-					Description: j.Description,
-					Worker:      w.ID,
-					WorkerName:  w.Name,
-					Error:       err.Error(),
-				})
-			}
-		}(w, j)
+		// Execute in goroutine using the consolidated helper
+		go sched.server.executeJobWithWorktree(w, j)
 	}
 }
 
@@ -832,6 +802,10 @@ func (s *Server) stopCleaner() {
 
 // createJobWorktree creates a dedicated worktree for a job.
 func (s *Server) createJobWorktree(j *job.Job) error {
+	if j == nil {
+		return fmt.Errorf("job is nil")
+	}
+
 	s.mu.RLock()
 	t := s.territory
 	s.mu.RUnlock()
@@ -852,6 +826,42 @@ func (s *Server) createJobWorktree(j *job.Job) error {
 	s.jobs.Save(j)
 
 	return nil
+}
+
+// executeJobWithWorktree handles the full job execution lifecycle:
+// creates worktree, logs events, executes job, and handles failures.
+// This consolidates the duplicated logic from handlers and scheduler.
+func (s *Server) executeJobWithWorktree(w *worker.Worker, j *job.Job) {
+	// Create job worktree before starting
+	if err := s.createJobWorktree(j); err != nil {
+		s.ledger.Append(ledger.EventJobFailed, ledger.JobEventData{
+			ID:          j.ID,
+			Description: j.Description,
+			Worker:      w.ID,
+			WorkerName:  w.Name,
+			Error:       fmt.Sprintf("failed to create job worktree: %v", err),
+		})
+		j.Fail(fmt.Sprintf("failed to create job worktree: %v", err))
+		s.jobs.Save(j)
+		return
+	}
+
+	s.ledger.Append(ledger.EventJobStarted, ledger.JobEventData{
+		ID:          j.ID,
+		Description: j.Description,
+		Worker:      w.ID,
+		WorkerName:  w.Name,
+	})
+
+	if err := w.ExecuteInWorktree(j, j.GetWorktree()); err != nil {
+		s.ledger.Append(ledger.EventJobFailed, ledger.JobEventData{
+			ID:          j.ID,
+			Description: j.Description,
+			Worker:      w.ID,
+			WorkerName:  w.Name,
+			Error:       err.Error(),
+		})
+	}
 }
 
 // mergeAndCleanupJobWorktree merges the job's branch into the target branch and cleans up.
@@ -880,6 +890,10 @@ func (s *Server) mergeAndCleanupJobWorktree(j *job.Job) error {
 			Error: fmt.Sprintf("failed to remove worktree: %v", err),
 		})
 		// Continue with merge attempt anyway
+	} else {
+		// Clear worktree path (but keep branch name for merge tracking)
+		j.SetWorktree("", jobBranch)
+		s.jobs.Save(j)
 	}
 
 	// Merge the job branch into the target branch

@@ -278,6 +278,10 @@ func FindMainRepoRoot(path string) (string, error) {
 // The worktree is placed in a "jobs" subdirectory under the worktree base.
 // The branch name is cosa/job/<shortJobID> based off the given base branch.
 func (m *Manager) CreateJobWorktree(jobID, baseBranch string) (*Worktree, error) {
+	if jobID == "" {
+		return nil, fmt.Errorf("jobID cannot be empty")
+	}
+
 	// Use first 8 chars of job ID for shorter branch names
 	shortID := jobID
 	if len(shortID) > 8 {
@@ -339,6 +343,10 @@ func (m *Manager) CreateJobWorktree(jobID, baseBranch string) (*Worktree, error)
 
 // RemoveJobWorktree removes a job's worktree by job ID.
 func (m *Manager) RemoveJobWorktree(jobID string, force bool) error {
+	if jobID == "" {
+		return fmt.Errorf("jobID cannot be empty")
+	}
+
 	shortID := jobID
 	if len(shortID) > 8 {
 		shortID = shortID[:8]
@@ -364,6 +372,10 @@ func (m *Manager) RemoveJobWorktree(jobID string, force bool) error {
 
 // DeleteBranch deletes a local branch.
 func (m *Manager) DeleteBranch(branchName string, force bool) error {
+	if branchName == "" {
+		return fmt.Errorf("branchName cannot be empty")
+	}
+
 	flag := "-d"
 	if force {
 		flag = "-D"
@@ -379,7 +391,11 @@ func (m *Manager) DeleteBranch(branchName string, force bool) error {
 }
 
 // GetJobWorktreePath returns the path for a job's worktree.
+// Returns empty string if jobID is empty.
 func (m *Manager) GetJobWorktreePath(jobID string) string {
+	if jobID == "" {
+		return ""
+	}
 	shortID := jobID
 	if len(shortID) > 8 {
 		shortID = shortID[:8]
@@ -388,7 +404,11 @@ func (m *Manager) GetJobWorktreePath(jobID string) string {
 }
 
 // GetJobBranchName returns the branch name for a job.
+// Returns empty string if jobID is empty.
 func (m *Manager) GetJobBranchName(jobID string) string {
+	if jobID == "" {
+		return ""
+	}
 	shortID := jobID
 	if len(shortID) > 8 {
 		shortID = shortID[:8]

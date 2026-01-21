@@ -387,37 +387,8 @@ func (s *Server) handleJobAdd(req *protocol.Request) *protocol.Response {
 				WorkerName:  w.Name,
 			})
 
-			go func() {
-				// Create job worktree before starting
-				if err := s.createJobWorktree(j); err != nil {
-					s.ledger.Append(ledger.EventJobFailed, ledger.JobEventData{
-						ID:          j.ID,
-						Description: j.Description,
-						Worker:      w.ID,
-						WorkerName:  w.Name,
-						Error:       fmt.Sprintf("failed to create job worktree: %v", err),
-					})
-					j.Fail(fmt.Sprintf("failed to create job worktree: %v", err))
-					s.jobs.Save(j)
-					return
-				}
-
-				s.ledger.Append(ledger.EventJobStarted, ledger.JobEventData{
-					ID:          j.ID,
-					Description: j.Description,
-					Worker:      w.ID,
-					WorkerName:  w.Name,
-				})
-				if err := w.ExecuteInWorktree(j, j.GetWorktree()); err != nil {
-					s.ledger.Append(ledger.EventJobFailed, ledger.JobEventData{
-						ID:          j.ID,
-						Description: j.Description,
-						Worker:      w.ID,
-						WorkerName:  w.Name,
-						Error:       err.Error(),
-					})
-				}
-			}()
+			// Execute using the consolidated helper
+			go s.executeJobWithWorktree(w, j)
 		} else {
 			// Worker not available, add to queue for scheduler
 			s.queue.Enqueue(j)
@@ -530,37 +501,8 @@ func (s *Server) handleJobAssign(req *protocol.Request) *protocol.Response {
 		WorkerName:  w.Name,
 	})
 
-	go func() {
-		// Create job worktree before starting
-		if err := s.createJobWorktree(j); err != nil {
-			s.ledger.Append(ledger.EventJobFailed, ledger.JobEventData{
-				ID:          j.ID,
-				Description: j.Description,
-				Worker:      w.ID,
-				WorkerName:  w.Name,
-				Error:       fmt.Sprintf("failed to create job worktree: %v", err),
-			})
-			j.Fail(fmt.Sprintf("failed to create job worktree: %v", err))
-			s.jobs.Save(j)
-			return
-		}
-
-		s.ledger.Append(ledger.EventJobStarted, ledger.JobEventData{
-			ID:          j.ID,
-			Description: j.Description,
-			Worker:      w.ID,
-			WorkerName:  w.Name,
-		})
-		if err := w.ExecuteInWorktree(j, j.GetWorktree()); err != nil {
-			s.ledger.Append(ledger.EventJobFailed, ledger.JobEventData{
-				ID:          j.ID,
-				Description: j.Description,
-				Worker:      w.ID,
-				WorkerName:  w.Name,
-				Error:       err.Error(),
-			})
-		}
-	}()
+	// Execute using the consolidated helper
+	go s.executeJobWithWorktree(w, j)
 
 	resp, _ := protocol.NewResponse(req.ID, map[string]string{"status": "assigned"})
 	return resp
