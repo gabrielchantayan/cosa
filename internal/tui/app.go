@@ -189,9 +189,9 @@ func (a *App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a.handleChatKey(msg)
 	}
 
-	// Handle input mode first
+	// Handle input mode first (dialogs)
 	if a.dashboard.IsInputMode() {
-		a.dashboard.HandleKey(msg.String())
+		a.dashboard.HandleDialogKey(msg.String())
 		return a, nil
 	}
 
