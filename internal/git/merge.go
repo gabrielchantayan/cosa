@@ -4,8 +4,39 @@ package git
 import (
 	"fmt"
 	"os/exec"
+	"regexp"
 	"strings"
 )
+
+// branchNamePattern defines the allowed characters in git branch names.
+// Allows alphanumeric, hyphens, underscores, forward slashes, and dots.
+// Disallows: spaces, shell metacharacters, and names starting with - (flag injection).
+var branchNamePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._/-]*$`)
+
+// ValidateBranchName checks if a branch name matches the allowed pattern.
+// Returns an error if the branch name is invalid or potentially dangerous.
+func ValidateBranchName(name string) error {
+	if name == "" {
+		return fmt.Errorf("branch name cannot be empty")
+	}
+	if len(name) > 255 {
+		return fmt.Errorf("branch name too long (max 255 characters)")
+	}
+	if !branchNamePattern.MatchString(name) {
+		return fmt.Errorf("invalid branch name: must start with alphanumeric and contain only alphanumeric, hyphens, underscores, dots, or forward slashes")
+	}
+	// Additional checks for git-specific invalid patterns
+	if strings.Contains(name, "..") {
+		return fmt.Errorf("invalid branch name: cannot contain '..'")
+	}
+	if strings.HasSuffix(name, ".lock") {
+		return fmt.Errorf("invalid branch name: cannot end with '.lock'")
+	}
+	if strings.HasSuffix(name, "/") {
+		return fmt.Errorf("invalid branch name: cannot end with '/'")
+	}
+	return nil
+}
 
 // DiffResult contains the result of a git diff operation.
 type DiffResult struct {
@@ -24,8 +55,14 @@ type MergeResult struct {
 
 // GetDiff returns the diff between a worktree's current state and the base branch.
 func (m *Manager) GetDiff(worktreePath, baseBranch string) (*DiffResult, error) {
+	// Validate branch name to prevent command injection
+	if err := ValidateBranchName(baseBranch); err != nil {
+		return nil, fmt.Errorf("invalid base branch: %w", err)
+	}
+
 	// Get the diff content
-	cmd := exec.Command("git", "diff", baseBranch+"...HEAD")
+	// Use -- to separate revision range from paths
+	cmd := exec.Command("git", "diff", "--", baseBranch+"...HEAD")
 	cmd.Dir = worktreePath
 	diffOut, err := cmd.Output()
 	if err != nil {
@@ -33,7 +70,7 @@ func (m *Manager) GetDiff(worktreePath, baseBranch string) (*DiffResult, error) 
 	}
 
 	// Get list of changed files
-	cmd = exec.Command("git", "diff", "--name-only", baseBranch+"...HEAD")
+	cmd = exec.Command("git", "diff", "--name-only", "--", baseBranch+"...HEAD")
 	cmd.Dir = worktreePath
 	filesOut, err := cmd.Output()
 	if err != nil {
@@ -48,7 +85,7 @@ func (m *Manager) GetDiff(worktreePath, baseBranch string) (*DiffResult, error) 
 	}
 
 	// Get stats
-	cmd = exec.Command("git", "diff", "--numstat", baseBranch+"...HEAD")
+	cmd = exec.Command("git", "diff", "--numstat", "--", baseBranch+"...HEAD")
 	cmd.Dir = worktreePath
 	statsOut, err := cmd.Output()
 	if err != nil {
@@ -67,15 +104,25 @@ func (m *Manager) GetDiff(worktreePath, baseBranch string) (*DiffResult, error) 
 
 // Merge merges a worker branch into the base branch.
 func (m *Manager) Merge(workerBranch, baseBranch string) (*MergeResult, error) {
+	// Validate branch names to prevent command injection
+	if err := ValidateBranchName(workerBranch); err != nil {
+		return nil, fmt.Errorf("invalid worker branch: %w", err)
+	}
+	if err := ValidateBranchName(baseBranch); err != nil {
+		return nil, fmt.Errorf("invalid base branch: %w", err)
+	}
+
 	// First, checkout the base branch
-	cmd := exec.Command("git", "checkout", baseBranch)
+	// Use -- to separate options from branch name
+	cmd := exec.Command("git", "checkout", "--", baseBranch)
 	cmd.Dir = m.repoRoot
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return nil, fmt.Errorf("failed to checkout base branch: %s: %w", string(out), err)
 	}
 
 	// Merge the worker branch with --no-ff to always create a merge commit
-	cmd = exec.Command("git", "merge", "--no-ff", workerBranch, "-m", fmt.Sprintf("Merge branch '%s'", workerBranch))
+	// Use -- to separate options from branch name
+	cmd = exec.Command("git", "merge", "--no-ff", "-m", fmt.Sprintf("Merge branch '%s'", workerBranch), "--", workerBranch)
 	cmd.Dir = m.repoRoot
 	if out, err := cmd.CombinedOutput(); err != nil {
 		// Check if it's a conflict
@@ -105,9 +152,18 @@ func (m *Manager) Merge(workerBranch, baseBranch string) (*MergeResult, error) {
 
 // HasConflicts checks if merging the worker branch would cause conflicts.
 func (m *Manager) HasConflicts(workerBranch, baseBranch string) (bool, []string, error) {
+	// Validate branch names to prevent command injection
+	if err := ValidateBranchName(workerBranch); err != nil {
+		return false, nil, fmt.Errorf("invalid worker branch: %w", err)
+	}
+	if err := ValidateBranchName(baseBranch); err != nil {
+		return false, nil, fmt.Errorf("invalid base branch: %w", err)
+	}
+
 	// Use git merge-tree to check for conflicts without actually merging
 	// First get the merge base
-	cmd := exec.Command("git", "merge-base", baseBranch, workerBranch)
+	// Use -- to separate options from commit refs
+	cmd := exec.Command("git", "merge-base", "--", baseBranch, workerBranch)
 	cmd.Dir = m.repoRoot
 	baseOut, err := cmd.Output()
 	if err != nil {
@@ -116,7 +172,8 @@ func (m *Manager) HasConflicts(workerBranch, baseBranch string) (bool, []string,
 	mergeBase := strings.TrimSpace(string(baseOut))
 
 	// Use merge-tree to simulate the merge
-	cmd = exec.Command("git", "merge-tree", mergeBase, baseBranch, workerBranch)
+	// mergeBase is a commit hash from git output, so it's safe
+	cmd = exec.Command("git", "merge-tree", "--", mergeBase, baseBranch, workerBranch)
 	cmd.Dir = m.repoRoot
 	out, _ := cmd.Output()
 
