@@ -101,6 +101,66 @@ type NotificationConfig struct {
 
 	// OnWorkerStuck enables notifications when workers are stuck.
 	OnWorkerStuck bool `yaml:"on_worker_stuck"`
+
+	// OnBudgetAlert enables notifications for budget warnings and exceeded limits.
+	OnBudgetAlert bool `yaml:"on_budget_alert"`
+
+	// Budget contains budget configuration for cost alerts.
+	Budget BudgetConfig `yaml:"budget"`
+
+	// Slack contains Slack webhook configuration.
+	Slack SlackConfig `yaml:"slack"`
+
+	// Discord contains Discord webhook configuration.
+	Discord DiscordConfig `yaml:"discord"`
+
+	// Webhook contains generic webhook configuration.
+	Webhook WebhookConfig `yaml:"webhook"`
+}
+
+// BudgetConfig contains budget alerting settings.
+type BudgetConfig struct {
+	// Limit is the budget limit in dollars (e.g., 10.00 for $10).
+	Limit float64 `yaml:"limit"`
+
+	// WarningThreshold is the percentage at which to send a warning (default: 80).
+	WarningThreshold int `yaml:"warning_threshold"`
+}
+
+// SlackConfig contains Slack webhook settings.
+type SlackConfig struct {
+	// Enabled enables Slack notifications.
+	Enabled bool `yaml:"enabled"`
+
+	// WebhookURL is the Slack incoming webhook URL.
+	WebhookURL string `yaml:"webhook_url"`
+
+	// Channel overrides the default webhook channel (optional).
+	Channel string `yaml:"channel"`
+}
+
+// DiscordConfig contains Discord webhook settings.
+type DiscordConfig struct {
+	// Enabled enables Discord notifications.
+	Enabled bool `yaml:"enabled"`
+
+	// WebhookURL is the Discord webhook URL.
+	WebhookURL string `yaml:"webhook_url"`
+}
+
+// WebhookConfig contains generic webhook settings.
+type WebhookConfig struct {
+	// Enabled enables webhook notifications.
+	Enabled bool `yaml:"enabled"`
+
+	// URL is the webhook endpoint URL.
+	URL string `yaml:"url"`
+
+	// Secret is included in the X-Cosa-Secret header for verification.
+	Secret string `yaml:"secret"`
+
+	// Headers contains additional HTTP headers to include.
+	Headers map[string]string `yaml:"headers"`
 }
 
 // ModelConfig contains per-role model configuration.
@@ -185,6 +245,14 @@ func DefaultConfig() *Config {
 			OnJobComplete:       true,
 			OnJobFailed:         true,
 			OnWorkerStuck:       true,
+			OnBudgetAlert:       true,
+			Budget: BudgetConfig{
+				Limit:            0, // 0 means no limit
+				WarningThreshold: 80,
+			},
+			Slack:   SlackConfig{},
+			Discord: DiscordConfig{},
+			Webhook: WebhookConfig{},
 		},
 		Models: ModelConfig{
 			Default:     "", // Use claude default

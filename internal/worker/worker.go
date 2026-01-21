@@ -87,6 +87,7 @@ type Worker struct {
 	onEvent       func(Event)
 	onJobComplete func(*job.Job)
 	onJobFail     func(*job.Job, error)
+	onCostUpdate  func(workerID, workerName, cost string, tokens int)
 }
 
 // Event represents a worker event.
@@ -108,6 +109,7 @@ type Config struct {
 	OnEvent           func(Event)
 	OnJobComplete     func(*job.Job)
 	OnJobFail         func(*job.Job, error)
+	OnCostUpdate      func(workerID, workerName, cost string, tokens int)
 	MergeTargetBranch string // Branch where work will be merged (dev branch or main)
 }
 
@@ -132,6 +134,7 @@ func New(cfg Config) *Worker {
 		onEvent:           cfg.OnEvent,
 		onJobComplete:     cfg.OnJobComplete,
 		onJobFail:         cfg.OnJobFail,
+		onCostUpdate:      cfg.OnCostUpdate,
 	}
 
 	if cfg.Worktree != nil {
@@ -506,9 +509,17 @@ func (w *Worker) ClearStandingOrders() {
 // UpdateCost updates the cost tracking fields.
 func (w *Worker) UpdateCost(cost string, tokens int) {
 	w.mu.Lock()
-	defer w.mu.Unlock()
 	w.TotalCost = cost
 	w.TotalTokens = tokens
+	callback := w.onCostUpdate
+	id := w.ID
+	name := w.Name
+	w.mu.Unlock()
+
+	// Call the cost update callback if set
+	if callback != nil {
+		callback(id, name, cost, tokens)
+	}
 }
 
 // SendMessage sends a message to the worker's active Claude session.

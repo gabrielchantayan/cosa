@@ -233,6 +233,7 @@ func (s *Server) handleWorkerAdd(req *protocol.Request) *protocol.Response {
 		},
 		OnJobComplete:     s.onJobComplete,
 		OnJobFail:         s.onJobFail,
+		OnCostUpdate:      s.onCostUpdate,
 		MergeTargetBranch: t.MergeTargetBranch(s.cfg.Git.DefaultMergeBranch),
 	})
 
