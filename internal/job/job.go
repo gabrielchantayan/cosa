@@ -159,6 +159,24 @@ func (j *Job) MarkForReview() {
 	j.Status = StatusReview
 }
 
+// Reset resets a failed or cancelled job back to pending state so it can be re-queued.
+// Returns an error if the job is not in a failed or cancelled state.
+func (j *Job) Reset() error {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.Status != StatusFailed && j.Status != StatusCancelled {
+		return fmt.Errorf("can only reset failed or cancelled jobs, current status: %s", j.Status)
+	}
+	j.Status = StatusPending
+	j.Error = ""
+	j.Worker = ""
+	j.SessionID = ""
+	j.QueuedAt = nil
+	j.StartedAt = nil
+	j.CompletedAt = nil
+	return nil
+}
+
 // GetStatus returns the current job status.
 func (j *Job) GetStatus() Status {
 	j.mu.RLock()

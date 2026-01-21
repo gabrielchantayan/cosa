@@ -245,6 +245,15 @@ func (j *JobList) Selected() *protocol.JobInfo {
 	return nil
 }
 
+// CanReassignSelected returns true if the selected job can be reassigned (is failed or cancelled).
+func (j *JobList) CanReassignSelected() bool {
+	selected := j.Selected()
+	if selected == nil {
+		return false
+	}
+	return selected.Status == "failed" || selected.Status == "cancelled"
+}
+
 // View renders the job list.
 func (j *JobList) View() string {
 	if len(j.jobs) == 0 {

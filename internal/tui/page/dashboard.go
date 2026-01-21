@@ -41,7 +41,8 @@ type Dashboard struct {
 	showDialog   bool
 
 	// Callbacks
-	onCreateJob func(description string)
+	onCreateJob   func(description string)
+	onReassignJob func(jobID string)
 }
 
 // NewDashboard creates a new dashboard page.
@@ -307,6 +308,14 @@ func (d *Dashboard) renderFooter() string {
 		{"q", "quit"},
 	}
 
+	// Add reassign option when a failed/cancelled job is selected
+	if d.CanReassignSelectedJob() {
+		keys = append([]struct {
+			key  string
+			desc string
+		}{{"R", "reassign job"}}, keys...)
+	}
+
 	var parts []string
 	keyStyle := lipgloss.NewStyle().Foreground(t.Primary).Bold(true)
 	descStyle := lipgloss.NewStyle().Foreground(t.TextMuted)
@@ -420,6 +429,34 @@ func (d *Dashboard) IsInputMode() bool {
 // SetOnCreateJob sets the callback for when a job is created.
 func (d *Dashboard) SetOnCreateJob(fn func(description string)) {
 	d.onCreateJob = fn
+}
+
+// SetOnReassignJob sets the callback for when a job is reassigned.
+func (d *Dashboard) SetOnReassignJob(fn func(jobID string)) {
+	d.onReassignJob = fn
+}
+
+// CanReassignSelectedJob returns true if the selected job can be reassigned.
+func (d *Dashboard) CanReassignSelectedJob() bool {
+	if d.focus != FocusJobs {
+		return false
+	}
+	return d.jobList.CanReassignSelected()
+}
+
+// ReassignSelectedJob triggers reassignment of the selected job.
+func (d *Dashboard) ReassignSelectedJob() {
+	if d.onReassignJob == nil {
+		return
+	}
+	selected := d.jobList.Selected()
+	if selected == nil {
+		return
+	}
+	if selected.Status != "failed" && selected.Status != "cancelled" {
+		return
+	}
+	d.onReassignJob(selected.ID)
 }
 
 // ShowNewJobDialog shows the new job dialog.

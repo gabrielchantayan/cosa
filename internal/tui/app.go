@@ -71,6 +71,9 @@ func NewApp(client *daemon.Client) *App {
 	app.dashboard.SetOnCreateJob(func(description string) {
 		app.createJob(description)
 	})
+	app.dashboard.SetOnReassignJob(func(jobID string) {
+		app.reassignJob(jobID)
+	})
 
 	return app
 }
@@ -279,6 +282,13 @@ func (a *App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.fetchWorkers,
 			a.fetchJobs,
 		)
+
+	case "R":
+		// Reassign failed job (capital R to avoid conflict with refresh)
+		if a.dashboard.CanReassignSelectedJob() {
+			a.dashboard.ReassignSelectedJob()
+		}
+		return a, nil
 	}
 
 	return a, nil
@@ -466,6 +476,30 @@ func (a *App) createJob(description string) {
 	}
 
 	a.dashboard.AddActivity(time.Now().Format("15:04:05"), "", fmt.Sprintf("Job created: %s", truncate(description, 30)))
+}
+
+func (a *App) reassignJob(jobID string) {
+	if a.client == nil {
+		a.dashboard.AddActivity(time.Now().Format("15:04:05"), "", "Error: No connection to daemon")
+		return
+	}
+
+	params := protocol.JobReassignParams{
+		JobID: jobID,
+	}
+
+	resp, err := a.client.Call(protocol.MethodJobReassign, params)
+	if err != nil {
+		a.dashboard.AddActivity(time.Now().Format("15:04:05"), "", fmt.Sprintf("Error reassigning job: %v", err))
+		return
+	}
+
+	if resp.Error != nil {
+		a.dashboard.AddActivity(time.Now().Format("15:04:05"), "", fmt.Sprintf("Error: %s", resp.Error.Message))
+		return
+	}
+
+	a.dashboard.AddActivity(time.Now().Format("15:04:05"), "", fmt.Sprintf("Job reassigned: %s", jobID[:8]))
 }
 
 func truncate(s string, maxLen int) string {

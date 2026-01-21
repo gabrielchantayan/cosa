@@ -184,6 +184,7 @@ const (
 	MethodJobStatus      = "job.status"
 	MethodJobCancel      = "job.cancel"
 	MethodJobAssign      = "job.assign"
+	MethodJobReassign    = "job.reassign"
 	MethodJobSetPriority = "job.setPriority"
 
 	// Queue management
@@ -315,6 +316,14 @@ type WorkerDetailInfo struct {
 type JobAssignParams struct {
 	JobID    string `json:"job_id"`
 	WorkerID string `json:"worker_id"`
+}
+
+// JobReassignParams are parameters for job.reassign.
+// Reassigns a failed job to be retried. If WorkerID is empty, the job is
+// re-queued for automatic scheduling.
+type JobReassignParams struct {
+	JobID    string `json:"job_id"`
+	WorkerID string `json:"worker_id,omitempty"` // Optional: specific worker, or auto-assign
 }
 
 // JobSetPriorityParams are parameters for job.setPriority.
