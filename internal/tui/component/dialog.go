@@ -141,13 +141,16 @@ func (d *Dialog) HandleKey(key string) string {
 				return d.buttons[0].Action
 			}
 			return ""
-		case "left":
-			if !d.input.Focused() && d.selectedButton > 0 {
-				d.selectedButton--
+		case "left", "right":
+			// When input is focused, pass arrow keys to input for cursor movement
+			if d.input.Focused() {
+				d.input.HandleKey(key)
+				return ""
 			}
-			return ""
-		case "right":
-			if !d.input.Focused() && d.selectedButton < len(d.buttons)-1 {
+			// Otherwise use for button navigation
+			if key == "left" && d.selectedButton > 0 {
+				d.selectedButton--
+			} else if key == "right" && d.selectedButton < len(d.buttons)-1 {
 				d.selectedButton++
 			}
 			return ""
