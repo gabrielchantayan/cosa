@@ -141,7 +141,7 @@ func (t *Territory) Save() error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(configPath, data, 0644)
+	return os.WriteFile(configPath, data, 0600)
 }
 
 // WorktreesPath returns the path to the worktrees directory.

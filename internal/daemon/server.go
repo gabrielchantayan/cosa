@@ -141,7 +141,7 @@ func (s *Server) Start() error {
 	s.listener = listener
 
 	// Write PID file
-	if err := os.WriteFile(s.cfg.PIDPath(), []byte(fmt.Sprintf("%d", os.Getpid())), 0644); err != nil {
+	if err := os.WriteFile(s.cfg.PIDPath(), []byte(fmt.Sprintf("%d", os.Getpid())), 0600); err != nil {
 		return fmt.Errorf("failed to write PID file: %w", err)
 	}
 

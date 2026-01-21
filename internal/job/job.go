@@ -363,7 +363,7 @@ func (s *Store) saveJob(job *Job) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.jobFilePath(job.ID), data, 0644)
+	return os.WriteFile(s.jobFilePath(job.ID), data, 0600)
 }
 
 func (s *Store) loadAll() error {
