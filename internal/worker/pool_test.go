@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"errors"
 	"sync"
 	"testing"
 
@@ -393,5 +394,103 @@ func TestPoolRemoveUpdatesRoleIndex(t *testing.T) {
 	capos := pool.ListByRole(RoleCapo)
 	if len(capos) != 1 {
 		t.Errorf("expected 1 capo, got %d", len(capos))
+	}
+}
+
+func TestValidateWorkerName(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		wantErr bool
+	}{
+		// Valid names
+		{"valid simple", "paulie", false},
+		{"valid with hyphen", "paulie-walnuts", false},
+		{"valid with underscore", "paulie_walnuts", false},
+		{"valid with numbers", "worker123", false},
+		{"valid alphanumeric mix", "worker-1_test", false},
+		{"valid single char", "a", false},
+		{"valid max length", "abcdefghijklmnopqrstuvwxyz1234567890abcdefghijklmnopqrstuvwxyz12", false}, // 64 chars
+
+		// Invalid names - path traversal attempts
+		{"path traversal dots", "../etc/passwd", true},
+		{"path traversal hidden", "..passwd", true},
+		{"path traversal forward slash", "foo/bar", true},
+		{"path traversal backslash", "foo\\bar", true},
+		{"path traversal complex", "../../etc/passwd", true},
+		{"path traversal encoded", "%2e%2e/etc", true}, // contains % which is invalid
+
+		// Invalid names - format issues
+		{"empty name", "", true},
+		{"starts with hyphen", "-worker", true},
+		{"starts with underscore", "_worker", true},
+		{"contains space", "worker name", true},
+		{"contains special char", "worker@name", true},
+		{"contains dot", "worker.name", true},
+		{"too long", "abcdefghijklmnopqrstuvwxyz1234567890abcdefghijklmnopqrstuvwxyz123", true}, // 65 chars
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateWorkerName(tt.input)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidateWorkerName(%q) error = %v, wantErr %v", tt.input, err, tt.wantErr)
+			}
+			if tt.wantErr && err != nil && !errors.Is(err, ErrInvalidWorkerName) {
+				t.Errorf("ValidateWorkerName(%q) error should wrap ErrInvalidWorkerName", tt.input)
+			}
+		})
+	}
+}
+
+func TestPoolAddInvalidName(t *testing.T) {
+	pool := NewPool()
+
+	// Try to add worker with path traversal name
+	w := &Worker{
+		ID:   "worker-1",
+		Name: "../etc/passwd",
+		Role: RoleSoldato,
+	}
+
+	err := pool.Add(w)
+	if err == nil {
+		t.Fatal("expected error when adding worker with path traversal name")
+	}
+	if !errors.Is(err, ErrInvalidWorkerName) {
+		t.Errorf("expected ErrInvalidWorkerName, got %v", err)
+	}
+
+	// Verify worker wasn't added
+	if pool.Count() != 0 {
+		t.Error("worker should not have been added to pool")
+	}
+}
+
+func TestPoolAddInvalidNameVariants(t *testing.T) {
+	invalidNames := []string{
+		"../etc/passwd",
+		"..\\windows\\system32",
+		"foo/bar",
+		"",
+		"-invalid",
+		"worker.json",
+		"worker name",
+	}
+
+	for _, name := range invalidNames {
+		t.Run(name, func(t *testing.T) {
+			pool := NewPool()
+			w := &Worker{
+				ID:   "worker-1",
+				Name: name,
+				Role: RoleSoldato,
+			}
+
+			err := pool.Add(w)
+			if err == nil {
+				t.Errorf("expected error for invalid name %q", name)
+			}
+		})
 	}
 }
