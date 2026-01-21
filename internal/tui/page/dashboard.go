@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"cosa/internal/protocol"
 	"cosa/internal/tui/component"
@@ -193,26 +194,64 @@ func (d *Dashboard) View() string {
 }
 
 func (d *Dashboard) renderWithDialogOverlay(baseView string, t theme.Theme) string {
-	// Get dialog view centered in the screen
-	dialogView := d.newJobDialog.CenterIn(d.width, d.height)
+	// Get the raw dialog view (not centered yet)
+	dialogView := d.newJobDialog.View()
+	if dialogView == "" {
+		return baseView
+	}
 
-	// Split base view into lines
+	dialogWidth := lipgloss.Width(dialogView)
+	dialogHeight := lipgloss.Height(dialogView)
+
+	// Calculate centering position
+	padLeft := (d.width - dialogWidth) / 2
+	padTop := (d.height - dialogHeight) / 2
+
+	if padLeft < 0 {
+		padLeft = 0
+	}
+	if padTop < 0 {
+		padTop = 0
+	}
+
+	// Split views into lines
 	baseLines := strings.Split(baseView, "\n")
-
-	// Split dialog view into lines
 	dialogLines := strings.Split(dialogView, "\n")
 
-	// Overlay the dialog on top of the base view
-	result := make([]string, d.height)
-	for i := 0; i < d.height && i < len(baseLines); i++ {
-		if i < len(dialogLines) && strings.TrimSpace(dialogLines[i]) != "" {
-			// Use dialog line, but pad to full width
-			dialogLine := dialogLines[i]
-			dialogWidth := lipgloss.Width(dialogLine)
-			if dialogWidth < d.width {
-				dialogLine = dialogLine + strings.Repeat(" ", d.width-dialogWidth)
+	// Ensure we have enough base lines
+	for len(baseLines) < d.height {
+		baseLines = append(baseLines, strings.Repeat(" ", d.width))
+	}
+
+	// Overlay the dialog onto the base view at the calculated position
+	// Use ANSI-aware string manipulation to avoid corrupting escape sequences
+	result := make([]string, len(baseLines))
+	for i := 0; i < len(baseLines); i++ {
+		dialogLineIdx := i - padTop
+		if dialogLineIdx >= 0 && dialogLineIdx < len(dialogLines) {
+			// This line has dialog content - merge it using ANSI-aware functions
+			baseLine := baseLines[i]
+			dialogLine := dialogLines[dialogLineIdx]
+			dialogLineWidth := lipgloss.Width(dialogLine)
+
+			// Build merged line: base prefix + dialog + base suffix
+			// ansi.Truncate safely cuts ANSI strings without breaking escape sequences
+			prefix := ansi.Truncate(baseLine, padLeft, "")
+			// Pad prefix if base line was shorter than padLeft
+			if lipgloss.Width(prefix) < padLeft {
+				prefix += strings.Repeat(" ", padLeft-lipgloss.Width(prefix))
 			}
-			result[i] = dialogLine
+
+			// Get suffix from base line after the dialog position
+			// ansi.Cut(s, left, right) extracts characters from position left to right
+			suffixStart := padLeft + dialogLineWidth
+			suffix := ""
+			baseLineWidth := lipgloss.Width(baseLine)
+			if suffixStart < baseLineWidth {
+				suffix = ansi.Cut(baseLine, suffixStart, baseLineWidth)
+			}
+
+			result[i] = prefix + dialogLine + suffix
 		} else {
 			result[i] = baseLines[i]
 		}
