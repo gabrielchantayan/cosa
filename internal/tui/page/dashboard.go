@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"cosa/internal/protocol"
 	"cosa/internal/tui/component"
@@ -282,41 +283,34 @@ func (d *Dashboard) renderWithDialogOverlay(baseView string) string {
 	}
 
 	// Overlay the dialog onto the base view at the calculated position
+	// Use ANSI-aware string manipulation to avoid corrupting escape sequences
 	result := make([]string, len(baseLines))
 	for i := 0; i < len(baseLines); i++ {
 		dialogLineIdx := i - padTop
 		if dialogLineIdx >= 0 && dialogLineIdx < len(dialogLines) {
-			// This line has dialog content - merge it
+			// This line has dialog content - merge it using ANSI-aware functions
 			baseLine := baseLines[i]
 			dialogLine := dialogLines[dialogLineIdx]
+			dialogLineWidth := lipgloss.Width(dialogLine)
 
-			// Ensure base line is long enough
-			baseRunes := []rune(baseLine)
-			for len(baseRunes) < d.width {
-				baseRunes = append(baseRunes, ' ')
+			// Build merged line: base prefix + dialog + base suffix
+			// ansi.Truncate safely cuts ANSI strings without breaking escape sequences
+			prefix := ansi.Truncate(baseLine, padLeft, "")
+			// Pad prefix if base line was shorter than padLeft
+			if lipgloss.Width(prefix) < padLeft {
+				prefix += strings.Repeat(" ", padLeft-lipgloss.Width(prefix))
 			}
 
-			// Build the merged line: base prefix + dialog + base suffix
-			dialogRunes := []rune(dialogLine)
-			mergedRunes := make([]rune, 0, d.width)
-
-			// Add base content before dialog
-			if padLeft > 0 && padLeft <= len(baseRunes) {
-				mergedRunes = append(mergedRunes, baseRunes[:padLeft]...)
-			} else {
-				mergedRunes = append(mergedRunes, make([]rune, padLeft)...)
+			// Get suffix from base line after the dialog position
+			// ansi.Cut(s, left, right) extracts characters from position left to right
+			suffixStart := padLeft + dialogLineWidth
+			suffix := ""
+			baseLineWidth := lipgloss.Width(baseLine)
+			if suffixStart < baseLineWidth {
+				suffix = ansi.Cut(baseLine, suffixStart, baseLineWidth)
 			}
 
-			// Add dialog content
-			mergedRunes = append(mergedRunes, dialogRunes...)
-
-			// Add base content after dialog
-			afterDialog := padLeft + len(dialogRunes)
-			if afterDialog < len(baseRunes) {
-				mergedRunes = append(mergedRunes, baseRunes[afterDialog:]...)
-			}
-
-			result[i] = string(mergedRunes)
+			result[i] = prefix + dialogLine + suffix
 		} else {
 			result[i] = baseLines[i]
 		}
