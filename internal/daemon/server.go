@@ -17,6 +17,7 @@ import (
 	"cosa/internal/git"
 	"cosa/internal/job"
 	"cosa/internal/ledger"
+	"cosa/internal/notify"
 	"cosa/internal/protocol"
 	"cosa/internal/review"
 	"cosa/internal/territory"
@@ -41,8 +42,12 @@ type Server struct {
 	reviewCoordinator *review.Coordinator
 
 	// Background services
-	lookout *worker.Lookout
-	cleaner *worker.Cleaner
+	lookout  *worker.Lookout
+	cleaner  *worker.Cleaner
+	notifier *notify.Notifier
+
+	// Budget tracking for alerts
+	budgetTracker *budgetTracker
 
 	// Chat session for interactive communication with underboss
 	chatSession *ChatSession
@@ -56,6 +61,29 @@ type Server struct {
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 	mu     sync.RWMutex
+}
+
+// budgetTracker tracks cumulative costs for budget alerts.
+type budgetTracker struct {
+	mu               sync.Mutex
+	totalCost        float64
+	warningNotified  bool
+	exceededNotified bool
+}
+
+// parseCost parses a cost string like "$1.23" to a float64.
+func parseCost(cost string) float64 {
+	if cost == "" {
+		return 0
+	}
+	// Remove $ prefix and parse
+	costStr := cost
+	if len(costStr) > 0 && costStr[0] == '$' {
+		costStr = costStr[1:]
+	}
+	var value float64
+	fmt.Sscanf(costStr, "%f", &value)
+	return value
 }
 
 // scheduler manages job-to-worker assignment.
@@ -114,18 +142,23 @@ func New(cfg *config.Config) (*Server, error) {
 	queue := job.NewQueue(jobs)
 	operations := job.NewOperationStore()
 
+	// Create notifier for job events
+	notifier := notify.New(&cfg.Notifications)
+
 	return &Server{
-		cfg:        cfg,
-		ledger:     l,
-		clients:    make(map[net.Conn]*clientState),
-		pool:       pool,
-		jobs:       jobs,
-		queue:      queue,
-		operations: operations,
-		sessions:   sessions,
-		ctx:        ctx,
-		cancel:     cancel,
-		startedAt:  time.Now(),
+		cfg:           cfg,
+		ledger:        l,
+		clients:       make(map[net.Conn]*clientState),
+		pool:          pool,
+		jobs:          jobs,
+		queue:         queue,
+		operations:    operations,
+		sessions:      sessions,
+		notifier:      notifier,
+		budgetTracker: &budgetTracker{},
+		ctx:           ctx,
+		cancel:        cancel,
+		startedAt:     time.Now(),
 	}, nil
 }
 
@@ -610,6 +643,9 @@ func (s *Server) onJobComplete(j *job.Job) {
 		WorkerName:  workerName,
 	})
 
+	// Send notification
+	s.notifier.NotifyJobComplete(j.ID, j.Description, workerName)
+
 	// Merge the job's worktree into the target branch and cleanup
 	if err := s.mergeAndCleanupJobWorktree(j); err != nil {
 		s.ledger.Append(ledger.EventType("job.post_complete_error"), ledger.JobEventData{
@@ -650,6 +686,9 @@ func (s *Server) onJobFail(j *job.Job, err error) {
 		WorkerName:  workerName,
 		Error:       err.Error(),
 	})
+
+	// Send notification
+	s.notifier.NotifyJobFailed(j.ID, j.Description, workerName, err.Error())
 }
 
 // initReviewCoordinator initializes the review coordinator for the current territory.
@@ -717,6 +756,7 @@ func (s *Server) restoreWorkers() {
 			},
 			OnJobComplete: s.onJobComplete,
 			OnJobFail:     s.onJobFail,
+			OnCostUpdate:  s.onCostUpdate,
 		})
 
 		// Restore persisted state
@@ -765,6 +805,8 @@ func (s *Server) startLookout() {
 				Role:  string(w.Role),
 				Error: fmt.Sprintf("worker stuck: severity=%s", severity),
 			})
+			// Send notification
+			s.notifier.NotifyWorkerStuck(w.Name, string(severity))
 		},
 	})
 	s.lookout.Start(s.ctx)
@@ -935,4 +977,53 @@ func (s *Server) mergeAndCleanupJobWorktree(j *job.Job) error {
 	s.jobs.Save(j)
 
 	return nil
+}
+
+// onCostUpdate is called when a worker reports a cost update.
+// It aggregates costs and checks budget thresholds.
+func (s *Server) onCostUpdate(workerID, workerName, cost string, tokens int) {
+	// Log cost event
+	s.ledger.Append(ledger.EventCostRecord, ledger.CostEventData{
+		WorkerID:   workerID,
+		WorkerName: workerName,
+		Cost:       cost,
+		Tokens:     tokens,
+	})
+
+	// Check budget threshold
+	budgetLimit := s.cfg.Notifications.Budget.Limit
+	if budgetLimit <= 0 {
+		return // No budget limit configured
+	}
+
+	// Calculate total cost across all workers
+	var totalCost float64
+	for _, w := range s.pool.List() {
+		totalCost += parseCost(w.TotalCost)
+	}
+
+	s.budgetTracker.mu.Lock()
+	defer s.budgetTracker.mu.Unlock()
+
+	// Store total cost
+	s.budgetTracker.totalCost = totalCost
+
+	// Check if exceeded
+	if totalCost >= budgetLimit && !s.budgetTracker.exceededNotified {
+		s.budgetTracker.exceededNotified = true
+		s.notifier.NotifyBudgetExceeded(totalCost, budgetLimit)
+		return
+	}
+
+	// Check warning threshold
+	warningThreshold := s.cfg.Notifications.Budget.WarningThreshold
+	if warningThreshold <= 0 {
+		warningThreshold = 80 // Default to 80%
+	}
+
+	percentage := int((totalCost / budgetLimit) * 100)
+	if percentage >= warningThreshold && !s.budgetTracker.warningNotified {
+		s.budgetTracker.warningNotified = true
+		s.notifier.NotifyBudgetWarning(totalCost, budgetLimit, percentage)
+	}
 }
