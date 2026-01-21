@@ -811,6 +811,173 @@ func (s *Server) loadExistingTerritory(path string) error {
 	return nil
 }
 
+// Template management handlers
+
+func (s *Server) handleTemplateList(req *protocol.Request) *protocol.Response {
+	var params protocol.TemplateListParams
+	if req.Params != nil {
+		json.Unmarshal(req.Params, &params)
+	}
+
+	var templates []*job.Template
+	if params.Type != "" {
+		templates = s.templates.ListByType(job.TemplateType(params.Type))
+	} else {
+		templates = s.templates.List()
+	}
+
+	infos := make([]protocol.TemplateInfo, 0, len(templates))
+	for _, t := range templates {
+		vars := make([]protocol.TemplateVar, len(t.Variables))
+		for i, v := range t.Variables {
+			vars[i] = protocol.TemplateVar{
+				Name:        v.Name,
+				Description: v.Description,
+				Required:    v.Required,
+				Default:     v.Default,
+			}
+		}
+		infos = append(infos, protocol.TemplateInfo{
+			ID:          t.ID,
+			Name:        t.Name,
+			Description: t.Description,
+			Type:        string(t.Type),
+			Priority:    t.Priority,
+			Variables:   vars,
+			Tags:        t.Tags,
+			BuiltIn:     t.BuiltIn,
+		})
+	}
+
+	resp, _ := protocol.NewResponse(req.ID, protocol.TemplateListResult{
+		Templates: infos,
+	})
+	return resp
+}
+
+func (s *Server) handleTemplateGet(req *protocol.Request) *protocol.Response {
+	var params protocol.TemplateGetParams
+	if req.Params != nil {
+		json.Unmarshal(req.Params, &params)
+	}
+
+	if params.ID == "" {
+		resp, _ := protocol.NewErrorResponse(req.ID, protocol.InvalidParams, "id is required", nil)
+		return resp
+	}
+
+	t, exists := s.templates.Get(params.ID)
+	if !exists {
+		resp, _ := protocol.NewErrorResponse(req.ID, protocol.ErrTemplateNotFound, "template not found", nil)
+		return resp
+	}
+
+	vars := make([]protocol.TemplateVar, len(t.Variables))
+	for i, v := range t.Variables {
+		vars[i] = protocol.TemplateVar{
+			Name:        v.Name,
+			Description: v.Description,
+			Required:    v.Required,
+			Default:     v.Default,
+		}
+	}
+
+	resp, _ := protocol.NewResponse(req.ID, protocol.TemplateGetResult{
+		Template: protocol.TemplateInfo{
+			ID:          t.ID,
+			Name:        t.Name,
+			Description: t.Description,
+			Type:        string(t.Type),
+			Priority:    t.Priority,
+			Variables:   vars,
+			Tags:        t.Tags,
+			BuiltIn:     t.BuiltIn,
+		},
+		Prompt: t.Prompt,
+	})
+	return resp
+}
+
+func (s *Server) handleTemplateUse(req *protocol.Request) *protocol.Response {
+	var params protocol.TemplateUseParams
+	if req.Params != nil {
+		json.Unmarshal(req.Params, &params)
+	}
+
+	if params.TemplateID == "" {
+		resp, _ := protocol.NewErrorResponse(req.ID, protocol.InvalidParams, "template_id is required", nil)
+		return resp
+	}
+
+	t, exists := s.templates.Get(params.TemplateID)
+	if !exists {
+		resp, _ := protocol.NewErrorResponse(req.ID, protocol.ErrTemplateNotFound, "template not found", nil)
+		return resp
+	}
+
+	// Create job from template
+	j, err := t.CreateJob(params.Variables)
+	if err != nil {
+		resp, _ := protocol.NewErrorResponse(req.ID, protocol.InvalidParams, err.Error(), nil)
+		return resp
+	}
+
+	// Override priority if specified
+	if params.Priority > 0 {
+		j.SetPriority(params.Priority)
+	}
+
+	// Set dependencies if specified
+	if len(params.DependsOn) > 0 {
+		j.SetDependencies(params.DependsOn)
+	}
+
+	// Add to store
+	s.jobs.Add(j)
+
+	// Log event
+	s.ledger.Append(ledger.EventJobCreated, ledger.JobEventData{
+		ID:          j.ID,
+		Description: j.Description,
+	})
+
+	// If worker specified, assign directly to that worker
+	if params.Worker != "" {
+		w, exists := s.pool.Get(params.Worker)
+		if !exists {
+			w, exists = s.pool.GetByID(params.Worker)
+		}
+
+		if exists && w.GetStatus() == worker.StatusIdle {
+			j.Queue()
+			s.jobs.Save(j)
+			s.ledger.Append(ledger.EventJobQueued, ledger.JobEventData{
+				ID:          j.ID,
+				Description: j.Description,
+				Worker:      w.ID,
+				WorkerName:  w.Name,
+			})
+
+			go s.executeJobWithWorktree(w, j)
+		} else {
+			s.queue.Enqueue(j)
+		}
+	} else {
+		s.queue.Enqueue(j)
+	}
+
+	resp, _ := protocol.NewResponse(req.ID, protocol.TemplateUseResult{
+		Job: protocol.JobInfo{
+			ID:          j.ID,
+			Description: j.Description,
+			Status:      string(j.GetStatus()),
+			Priority:    j.Priority,
+			CreatedAt:   j.CreatedAt.Unix(),
+		},
+	})
+	return resp
+}
+
 // Review management handlers
 
 func (s *Server) handleReviewStart(req *protocol.Request) *protocol.Response {

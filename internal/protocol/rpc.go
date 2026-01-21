@@ -94,6 +94,7 @@ const (
 	ErrOperationNotFound  = -32006
 	ErrGateFailed         = -32007
 	ErrMergeConflict      = -32008
+	ErrTemplateNotFound   = -32009
 )
 
 // NewRequest creates a new JSON-RPC request.
@@ -214,6 +215,11 @@ const (
 	MethodChatSend    = "chat.send"
 	MethodChatEnd     = "chat.end"
 	MethodChatHistory = "chat.history"
+
+	// Template management
+	MethodTemplateList = "template.list"
+	MethodTemplateGet  = "template.get"
+	MethodTemplateUse  = "template.use"
 
 	// Subscriptions for real-time updates
 	MethodSubscribe   = "subscribe"
@@ -477,4 +483,59 @@ type ChatMessage struct {
 	Role      string `json:"role"` // "user" or "assistant"
 	Content   string `json:"content"`
 	Timestamp int64  `json:"timestamp"`
+}
+
+// TemplateVar describes a variable in a template.
+type TemplateVar struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Required    bool   `json:"required"`
+	Default     string `json:"default,omitempty"`
+}
+
+// TemplateInfo describes a job template.
+type TemplateInfo struct {
+	ID          string        `json:"id"`
+	Name        string        `json:"name"`
+	Description string        `json:"description"`
+	Type        string        `json:"type"`
+	Priority    int           `json:"priority"`
+	Variables   []TemplateVar `json:"variables,omitempty"`
+	Tags        []string      `json:"tags,omitempty"`
+	BuiltIn     bool          `json:"built_in"`
+}
+
+// TemplateListParams are parameters for template.list.
+type TemplateListParams struct {
+	Type string `json:"type,omitempty"` // Filter by template type
+}
+
+// TemplateListResult is the response for template.list.
+type TemplateListResult struct {
+	Templates []TemplateInfo `json:"templates"`
+}
+
+// TemplateGetParams are parameters for template.get.
+type TemplateGetParams struct {
+	ID string `json:"id"`
+}
+
+// TemplateGetResult is the response for template.get.
+type TemplateGetResult struct {
+	Template TemplateInfo `json:"template"`
+	Prompt   string       `json:"prompt"` // Full prompt text
+}
+
+// TemplateUseParams are parameters for template.use.
+type TemplateUseParams struct {
+	TemplateID string            `json:"template_id"`
+	Variables  map[string]string `json:"variables,omitempty"`
+	Priority   int               `json:"priority,omitempty"` // Override template priority
+	Worker     string            `json:"worker,omitempty"`   // Assign to specific worker
+	DependsOn  []string          `json:"depends_on,omitempty"`
+}
+
+// TemplateUseResult is the response for template.use.
+type TemplateUseResult struct {
+	Job JobInfo `json:"job"`
 }

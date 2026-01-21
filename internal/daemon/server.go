@@ -37,6 +37,7 @@ type Server struct {
 	queue             *job.Queue
 	operations        *job.OperationStore
 	sessions          *claude.SessionStore
+	templates         *job.TemplateStore
 	scheduler         *scheduler
 	reviewCoordinator *review.Coordinator
 
@@ -114,6 +115,13 @@ func New(cfg *config.Config) (*Server, error) {
 	queue := job.NewQueue(jobs)
 	operations := job.NewOperationStore()
 
+	// Create persistent template store
+	templatesPath := filepath.Join(cfg.DataDir, "templates")
+	templates, err := job.NewPersistentTemplateStore(templatesPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create template store: %w", err)
+	}
+
 	return &Server{
 		cfg:        cfg,
 		ledger:     l,
@@ -123,6 +131,7 @@ func New(cfg *config.Config) (*Server, error) {
 		queue:      queue,
 		operations: operations,
 		sessions:   sessions,
+		templates:  templates,
 		ctx:        ctx,
 		cancel:     cancel,
 		startedAt:  time.Now(),
@@ -386,6 +395,12 @@ func (s *Server) handleRequest(req *protocol.Request, conn net.Conn) *protocol.R
 		return s.handleChatEnd(req)
 	case protocol.MethodChatHistory:
 		return s.handleChatHistory(req)
+	case protocol.MethodTemplateList:
+		return s.handleTemplateList(req)
+	case protocol.MethodTemplateGet:
+		return s.handleTemplateGet(req)
+	case protocol.MethodTemplateUse:
+		return s.handleTemplateUse(req)
 	default:
 		resp, _ := protocol.NewErrorResponse(req.ID, protocol.MethodNotFound, "Method not found", nil)
 		return resp

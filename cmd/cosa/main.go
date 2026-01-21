@@ -52,6 +52,7 @@ role system and real-time TUI.`,
 		territoryCmd(),
 		workerCmd(),
 		jobCmd(),
+		templateCmd(),
 		reviewCmd(),
 		operationCmd(),
 		orderCmd(),
@@ -827,6 +828,223 @@ func jobCancelCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+// Template commands
+
+func templateCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:     "template",
+		Short:   "Manage job templates",
+		Aliases: []string{"tmpl", "templates"},
+	}
+
+	cmd.AddCommand(
+		templateListCmd(),
+		templateShowCmd(),
+		templateUseCmd(),
+	)
+
+	return cmd
+}
+
+func templateListCmd() *cobra.Command {
+	var filterType string
+
+	cmd := &cobra.Command{
+		Use:     "list",
+		Short:   "List available job templates",
+		Aliases: []string{"ls"},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client, err := daemon.Connect(cfg.SocketPath)
+			if err != nil {
+				return fmt.Errorf("daemon not running")
+			}
+			defer client.Close()
+
+			params := protocol.TemplateListParams{
+				Type: filterType,
+			}
+
+			resp, err := client.Call(protocol.MethodTemplateList, params)
+			if err != nil {
+				return err
+			}
+
+			if resp.Error != nil {
+				return fmt.Errorf("%s", resp.Error.Message)
+			}
+
+			var result protocol.TemplateListResult
+			json.Unmarshal(resp.Result, &result)
+
+			if len(result.Templates) == 0 {
+				fmt.Println("No templates found")
+				return nil
+			}
+
+			fmt.Printf("%-20s %-12s %-4s %s\n", "ID", "TYPE", "PRI", "DESCRIPTION")
+			for _, t := range result.Templates {
+				desc := t.Description
+				if len(desc) > 45 {
+					desc = desc[:45] + ".."
+				}
+				fmt.Printf("%-20s %-12s %-4d %s\n", t.ID, t.Type, t.Priority, desc)
+			}
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVarP(&filterType, "type", "t", "", "Filter by type (refactor, test, document, review)")
+
+	return cmd
+}
+
+func templateShowCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:     "show <template-id>",
+		Short:   "Show template details",
+		Aliases: []string{"get", "info"},
+		Args:    cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client, err := daemon.Connect(cfg.SocketPath)
+			if err != nil {
+				return fmt.Errorf("daemon not running")
+			}
+			defer client.Close()
+
+			resp, err := client.Call(protocol.MethodTemplateGet, protocol.TemplateGetParams{
+				ID: args[0],
+			})
+			if err != nil {
+				return err
+			}
+
+			if resp.Error != nil {
+				return fmt.Errorf("%s", resp.Error.Message)
+			}
+
+			var result protocol.TemplateGetResult
+			json.Unmarshal(resp.Result, &result)
+
+			t := result.Template
+			fmt.Printf("Template: %s\n", t.Name)
+			fmt.Printf("  ID:          %s\n", t.ID)
+			fmt.Printf("  Type:        %s\n", t.Type)
+			fmt.Printf("  Priority:    %d\n", t.Priority)
+			fmt.Printf("  Description: %s\n", t.Description)
+			if t.BuiltIn {
+				fmt.Printf("  Built-in:    yes\n")
+			}
+
+			if len(t.Variables) > 0 {
+				fmt.Println("\nVariables:")
+				for _, v := range t.Variables {
+					required := ""
+					if v.Required {
+						required = " (required)"
+					}
+					defaultVal := ""
+					if v.Default != "" {
+						defaultVal = fmt.Sprintf(" [default: %s]", v.Default)
+					}
+					fmt.Printf("  - %s%s%s\n", v.Name, required, defaultVal)
+					if v.Description != "" {
+						fmt.Printf("    %s\n", v.Description)
+					}
+				}
+			}
+
+			if len(t.Tags) > 0 {
+				fmt.Printf("\nTags: %s\n", strings.Join(t.Tags, ", "))
+			}
+
+			fmt.Println("\nPrompt:")
+			fmt.Println("---")
+			fmt.Println(result.Prompt)
+			fmt.Println("---")
+
+			return nil
+		},
+	}
+}
+
+func templateUseCmd() *cobra.Command {
+	var worker string
+	var priority int
+	var vars []string
+
+	cmd := &cobra.Command{
+		Use:   "use <template-id>",
+		Short: "Create a job from a template",
+		Long: `Create a new job using a template.
+
+Variables can be specified with the -v flag:
+  cosa template use refactor-file -v file=src/main.go -v focus=performance
+
+Examples:
+  cosa template use test-unit -v target=internal/api/handler.go
+  cosa template use review-code -v target=HEAD~5..HEAD -w paulie`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client, err := daemon.Connect(cfg.SocketPath)
+			if err != nil {
+				return fmt.Errorf("daemon not running")
+			}
+			defer client.Close()
+
+			// Parse variables
+			variables := make(map[string]string)
+			for _, v := range vars {
+				parts := strings.SplitN(v, "=", 2)
+				if len(parts) != 2 {
+					return fmt.Errorf("invalid variable format: %s (expected name=value)", v)
+				}
+				variables[parts[0]] = parts[1]
+			}
+
+			params := protocol.TemplateUseParams{
+				TemplateID: args[0],
+				Variables:  variables,
+				Priority:   priority,
+				Worker:     worker,
+			}
+
+			resp, err := client.Call(protocol.MethodTemplateUse, params)
+			if err != nil {
+				return err
+			}
+
+			if resp.Error != nil {
+				return fmt.Errorf("%s", resp.Error.Message)
+			}
+
+			var result protocol.TemplateUseResult
+			json.Unmarshal(resp.Result, &result)
+
+			fmt.Printf("Job created from template:\n")
+			fmt.Printf("  ID:          %s\n", result.Job.ID[:8])
+			fmt.Printf("  Status:      %s\n", result.Job.Status)
+			fmt.Printf("  Priority:    %d\n", result.Job.Priority)
+			fmt.Printf("  Description: %s\n", truncate(result.Job.Description, 60))
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVarP(&worker, "worker", "w", "", "Assign to specific worker")
+	cmd.Flags().IntVarP(&priority, "priority", "p", 0, "Override template priority (1-5)")
+	cmd.Flags().StringArrayVarP(&vars, "var", "v", nil, "Variable in name=value format")
+
+	return cmd
+}
+
+func truncate(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max-2] + ".."
 }
 
 // Review commands

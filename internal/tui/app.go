@@ -11,6 +11,7 @@ import (
 	"cosa/internal/daemon"
 	"cosa/internal/ledger"
 	"cosa/internal/protocol"
+	"cosa/internal/tui/component"
 	"cosa/internal/tui/page"
 	"cosa/internal/tui/styles"
 )
@@ -42,6 +43,7 @@ type tickMsg time.Time
 type statusMsg *protocol.StatusResult
 type workersMsg []protocol.WorkerInfo
 type jobsMsg []protocol.JobInfo
+type templatesMsg []component.TemplateItem
 type eventMsg ledger.Event
 type errMsg error
 
@@ -74,6 +76,9 @@ func NewApp(client *daemon.Client) *App {
 	app.dashboard.SetOnReassignJob(func(jobID string) {
 		app.reassignJob(jobID)
 	})
+	app.dashboard.SetOnUseTemplate(func(templateID string, variables map[string]string) {
+		app.useTemplate(templateID, variables)
+	})
 
 	return app
 }
@@ -92,6 +97,7 @@ func (a *App) Init() tea.Cmd {
 		a.fetchStatus,
 		a.fetchWorkers,
 		a.fetchJobs,
+		a.fetchTemplates,
 		a.tickEvery(time.Second),
 	)
 }
@@ -138,6 +144,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.dashboard.SetJobs(msg)
 		// Update chat job counts
 		a.updateChatJobCounts()
+		return a, nil
+
+	case templatesMsg:
+		a.dashboard.SetTemplates(msg)
 		return a, nil
 
 	case eventMsg:
@@ -187,6 +197,12 @@ func (a *App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Handle chat page
 	if a.activePage == "chat" {
 		return a.handleChatKey(msg)
+	}
+
+	// Handle template selector mode
+	if a.dashboard.IsTemplateMode() {
+		a.dashboard.HandleTemplateSelectorKey(msg.String())
+		return a, nil
 	}
 
 	// Handle input mode first (dialogs)
@@ -243,6 +259,11 @@ func (a *App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "n":
 		// New job dialog
 		a.dashboard.ShowNewJobDialog()
+		return a, nil
+
+	case "t":
+		// Template selector
+		a.dashboard.ShowTemplateSelector()
 		return a, nil
 
 	case "o":
@@ -453,6 +474,46 @@ func (a *App) tickEvery(d time.Duration) tea.Cmd {
 	})
 }
 
+func (a *App) fetchTemplates() tea.Msg {
+	if a.client == nil {
+		return nil
+	}
+
+	resp, err := a.client.Call(protocol.MethodTemplateList, nil)
+	if err != nil {
+		return nil // Don't report error for templates
+	}
+
+	if resp.Error != nil {
+		return nil
+	}
+
+	var result protocol.TemplateListResult
+	json.Unmarshal(resp.Result, &result)
+
+	// Convert to component.TemplateItem
+	items := make([]component.TemplateItem, len(result.Templates))
+	for i, t := range result.Templates {
+		vars := make([]component.TemplateVariable, len(t.Variables))
+		for j, v := range t.Variables {
+			vars[j] = component.TemplateVariable{
+				Name:        v.Name,
+				Description: v.Description,
+				Required:    v.Required,
+				Default:     v.Default,
+			}
+		}
+		items[i] = component.TemplateItem{
+			ID:          t.ID,
+			Name:        t.Name,
+			Description: t.Description,
+			Type:        t.Type,
+			Variables:   vars,
+		}
+	}
+	return templatesMsg(items)
+}
+
 func (a *App) createJob(description string) {
 	if a.client == nil {
 		a.dashboard.AddActivity(time.Now().Format("15:04:05"), "", "Error: No connection to daemon")
@@ -500,6 +561,34 @@ func (a *App) reassignJob(jobID string) {
 	}
 
 	a.dashboard.AddActivity(time.Now().Format("15:04:05"), "", fmt.Sprintf("Job reassigned: %s", jobID[:8]))
+}
+
+func (a *App) useTemplate(templateID string, variables map[string]string) {
+	if a.client == nil {
+		a.dashboard.AddActivity(time.Now().Format("15:04:05"), "", "Error: No connection to daemon")
+		return
+	}
+
+	params := protocol.TemplateUseParams{
+		TemplateID: templateID,
+		Variables:  variables,
+	}
+
+	resp, err := a.client.Call(protocol.MethodTemplateUse, params)
+	if err != nil {
+		a.dashboard.AddActivity(time.Now().Format("15:04:05"), "", fmt.Sprintf("Error using template: %v", err))
+		return
+	}
+
+	if resp.Error != nil {
+		a.dashboard.AddActivity(time.Now().Format("15:04:05"), "", fmt.Sprintf("Error: %s", resp.Error.Message))
+		return
+	}
+
+	var result protocol.TemplateUseResult
+	json.Unmarshal(resp.Result, &result)
+
+	a.dashboard.AddActivity(time.Now().Format("15:04:05"), "", fmt.Sprintf("Job created from template: %s", result.Job.ID[:8]))
 }
 
 func truncate(s string, maxLen int) string {
