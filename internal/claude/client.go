@@ -76,6 +76,19 @@ func (c *Client) SessionID() string {
 	return c.sessionID
 }
 
+// CloneConfig returns a new ClientConfig based on this client's settings,
+// with the workdir optionally overridden. This is useful for creating
+// a new client with the same settings but a different working directory.
+func (c *Client) CloneConfig(workdir string) ClientConfig {
+	return ClientConfig{
+		Binary:    c.binary,
+		Model:     c.model,
+		MaxTurns:  c.maxTurns,
+		Workdir:   workdir,
+		MCPConfig: c.mcpConfig,
+	}
+}
+
 // Start begins a new Claude session with the given prompt.
 func (c *Client) Start(ctx context.Context, prompt string) error {
 	// Reset channels for new session (in case client is reused)

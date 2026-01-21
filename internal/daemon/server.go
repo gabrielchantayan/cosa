@@ -67,6 +67,7 @@ type scheduler struct {
 	jobs     *job.Store
 	ledger   *ledger.Ledger
 	tickRate time.Duration
+	server   *Server // Reference to server for territory access
 }
 
 type clientState struct {
@@ -534,6 +535,7 @@ func (s *Server) startScheduler() {
 		jobs:     s.jobs,
 		ledger:   s.ledger,
 		tickRate: 100 * time.Millisecond,
+		server:   s,
 	}
 
 	s.wg.Add(1)
@@ -585,24 +587,8 @@ func (sched *scheduler) processQueue() {
 			WorkerName:  w.Name,
 		})
 
-		// Execute in goroutine
-		go func(w *worker.Worker, j *job.Job) {
-			sched.ledger.Append(ledger.EventJobStarted, ledger.JobEventData{
-				ID:          j.ID,
-				Description: j.Description,
-				Worker:      w.ID,
-				WorkerName:  w.Name,
-			})
-			if err := w.Execute(j); err != nil {
-				sched.ledger.Append(ledger.EventJobFailed, ledger.JobEventData{
-					ID:          j.ID,
-					Description: j.Description,
-					Worker:      w.ID,
-					WorkerName:  w.Name,
-					Error:       err.Error(),
-				})
-			}
-		}(w, j)
+		// Execute in goroutine using the consolidated helper
+		go sched.server.executeJobWithWorktree(w, j)
 	}
 }
 
@@ -623,6 +609,14 @@ func (s *Server) onJobComplete(j *job.Job) {
 		Worker:      j.Worker,
 		WorkerName:  workerName,
 	})
+
+	// Merge the job's worktree into the target branch and cleanup
+	if err := s.mergeAndCleanupJobWorktree(j); err != nil {
+		s.ledger.Append(ledger.EventType("job.post_complete_error"), ledger.JobEventData{
+			ID:    j.ID,
+			Error: fmt.Sprintf("post-completion merge failed: %v", err),
+		})
+	}
 
 	// Trigger auto-review if enabled
 	s.mu.RLock()
@@ -806,4 +800,139 @@ func (s *Server) stopCleaner() {
 	if s.cleaner != nil {
 		s.cleaner.Stop()
 	}
+}
+
+// createJobWorktree creates a dedicated worktree for a job.
+func (s *Server) createJobWorktree(j *job.Job) error {
+	if j == nil {
+		return fmt.Errorf("job is nil")
+	}
+
+	s.mu.RLock()
+	t := s.territory
+	s.mu.RUnlock()
+
+	if t == nil {
+		return fmt.Errorf("territory not initialized")
+	}
+
+	gitMgr := t.GitManager()
+	baseBranch := t.MergeTargetBranch(s.cfg.Git.DefaultMergeBranch)
+
+	wt, err := gitMgr.CreateJobWorktree(j.ID, baseBranch)
+	if err != nil {
+		return err
+	}
+
+	j.SetWorktree(wt.Path, wt.Branch)
+	s.jobs.Save(j)
+
+	return nil
+}
+
+// executeJobWithWorktree handles the full job execution lifecycle:
+// creates worktree, logs events, executes job, and handles failures.
+// This consolidates the duplicated logic from handlers and scheduler.
+func (s *Server) executeJobWithWorktree(w *worker.Worker, j *job.Job) {
+	// Create job worktree before starting
+	if err := s.createJobWorktree(j); err != nil {
+		s.ledger.Append(ledger.EventJobFailed, ledger.JobEventData{
+			ID:          j.ID,
+			Description: j.Description,
+			Worker:      w.ID,
+			WorkerName:  w.Name,
+			Error:       fmt.Sprintf("failed to create job worktree: %v", err),
+		})
+		j.Fail(fmt.Sprintf("failed to create job worktree: %v", err))
+		s.jobs.Save(j)
+		return
+	}
+
+	s.ledger.Append(ledger.EventJobStarted, ledger.JobEventData{
+		ID:          j.ID,
+		Description: j.Description,
+		Worker:      w.ID,
+		WorkerName:  w.Name,
+	})
+
+	if err := w.ExecuteInWorktree(j, j.GetWorktree()); err != nil {
+		s.ledger.Append(ledger.EventJobFailed, ledger.JobEventData{
+			ID:          j.ID,
+			Description: j.Description,
+			Worker:      w.ID,
+			WorkerName:  w.Name,
+			Error:       err.Error(),
+		})
+	}
+}
+
+// mergeAndCleanupJobWorktree merges the job's branch into the target branch and cleans up.
+func (s *Server) mergeAndCleanupJobWorktree(j *job.Job) error {
+	s.mu.RLock()
+	t := s.territory
+	s.mu.RUnlock()
+
+	if t == nil {
+		return fmt.Errorf("territory not initialized")
+	}
+
+	jobBranch := j.GetBranch()
+	if jobBranch == "" {
+		// No worktree was created for this job (legacy job)
+		return nil
+	}
+
+	gitMgr := t.GitManager()
+	targetBranch := t.MergeTargetBranch(s.cfg.Git.DefaultMergeBranch)
+
+	// First, remove the worktree (must be done before merging to release the branch)
+	if err := gitMgr.RemoveJobWorktree(j.ID, true); err != nil {
+		s.ledger.Append(ledger.EventType("job.worktree_cleanup_error"), ledger.JobEventData{
+			ID:    j.ID,
+			Error: fmt.Sprintf("failed to remove worktree: %v", err),
+		})
+		// Continue with merge attempt anyway
+	} else {
+		// Clear worktree path (but keep branch name for merge tracking)
+		j.SetWorktree("", jobBranch)
+		s.jobs.Save(j)
+	}
+
+	// Merge the job branch into the target branch
+	result, err := gitMgr.Merge(jobBranch, targetBranch)
+	if err != nil {
+		s.ledger.Append(ledger.EventType("job.merge_error"), ledger.JobEventData{
+			ID:    j.ID,
+			Error: fmt.Sprintf("failed to merge: %v", err),
+		})
+		return err
+	}
+
+	if !result.Success {
+		s.ledger.Append(ledger.EventType("job.merge_conflict"), ledger.JobEventData{
+			ID:    j.ID,
+			Error: result.Message,
+		})
+		return fmt.Errorf("merge conflict: %s", result.Message)
+	}
+
+	s.ledger.Append(ledger.EventType("job.merged"), ledger.JobEventData{
+		ID:          j.ID,
+		Description: fmt.Sprintf("Merged into %s (commit: %s)", targetBranch, result.MergeCommit),
+	})
+
+	// Delete the job branch after successful merge
+	if err := gitMgr.DeleteBranch(jobBranch, true); err != nil {
+		s.ledger.Append(ledger.EventType("job.branch_cleanup_error"), ledger.JobEventData{
+			ID:    j.ID,
+			Error: fmt.Sprintf("failed to delete branch: %v", err),
+		})
+		// Non-fatal, continue
+	}
+
+	// Clear worktree info from job
+	j.ClearWorktree()
+	s.jobs.Save(j)
+
+	return nil
 }

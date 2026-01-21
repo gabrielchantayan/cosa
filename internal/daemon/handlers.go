@@ -387,23 +387,8 @@ func (s *Server) handleJobAdd(req *protocol.Request) *protocol.Response {
 				WorkerName:  w.Name,
 			})
 
-			go func() {
-				s.ledger.Append(ledger.EventJobStarted, ledger.JobEventData{
-					ID:          j.ID,
-					Description: j.Description,
-					Worker:      w.ID,
-					WorkerName:  w.Name,
-				})
-				if err := w.Execute(j); err != nil {
-					s.ledger.Append(ledger.EventJobFailed, ledger.JobEventData{
-						ID:          j.ID,
-						Description: j.Description,
-						Worker:      w.ID,
-						WorkerName:  w.Name,
-						Error:       err.Error(),
-					})
-				}
-			}()
+			// Execute using the consolidated helper
+			go s.executeJobWithWorktree(w, j)
 		} else {
 			// Worker not available, add to queue for scheduler
 			s.queue.Enqueue(j)
@@ -516,23 +501,8 @@ func (s *Server) handleJobAssign(req *protocol.Request) *protocol.Response {
 		WorkerName:  w.Name,
 	})
 
-	go func() {
-		s.ledger.Append(ledger.EventJobStarted, ledger.JobEventData{
-			ID:          j.ID,
-			Description: j.Description,
-			Worker:      w.ID,
-			WorkerName:  w.Name,
-		})
-		if err := w.Execute(j); err != nil {
-			s.ledger.Append(ledger.EventJobFailed, ledger.JobEventData{
-				ID:          j.ID,
-				Description: j.Description,
-				Worker:      w.ID,
-				WorkerName:  w.Name,
-				Error:       err.Error(),
-			})
-		}
-	}()
+	// Execute using the consolidated helper
+	go s.executeJobWithWorktree(w, j)
 
 	resp, _ := protocol.NewResponse(req.ID, map[string]string{"status": "assigned"})
 	return resp
