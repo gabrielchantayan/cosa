@@ -302,9 +302,11 @@ func (d *Dialog) View() string {
 		labelStyle := lipgloss.NewStyle().
 			Foreground(t.TextMuted).
 			Padding(0, 2)
+		textAreaWrapper := lipgloss.NewStyle().
+			Padding(0, 2)
 		textAreaSection := lipgloss.JoinVertical(lipgloss.Left,
 			labelStyle.Render(d.textAreaLabel),
-			"  "+d.textArea.View(),
+			textAreaWrapper.Render(d.textArea.View()),
 		)
 		sections = append(sections, textAreaSection)
 	}
