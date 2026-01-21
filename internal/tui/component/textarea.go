@@ -7,6 +7,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"cosa/internal/tui/theme"
+	"cosa/internal/tui/util"
 )
 
 // TextArea is a multi-line text input component with word wrapping.
@@ -133,80 +134,6 @@ func (t *TextArea) HandleKey(key string) {
 	}
 }
 
-// wrapTextArea wraps text to fit within the given width, respecting word boundaries.
-// Words longer than the width are broken at the width boundary.
-func wrapTextArea(text string, width int) []string {
-	if width <= 0 {
-		return []string{}
-	}
-
-	var lines []string
-	paragraphs := strings.Split(text, "\n")
-
-	for _, para := range paragraphs {
-		if para == "" {
-			lines = append(lines, "")
-			continue
-		}
-
-		words := strings.Fields(para)
-		if len(words) == 0 {
-			lines = append(lines, "")
-			continue
-		}
-
-		var currentLine strings.Builder
-		currentWidth := 0
-
-		for _, word := range words {
-			wordLen := len(word)
-
-			// If word is longer than width, break it
-			if wordLen > width {
-				// Flush current line first
-				if currentWidth > 0 {
-					lines = append(lines, currentLine.String())
-					currentLine.Reset()
-					currentWidth = 0
-				}
-				// Break the long word
-				for len(word) > width {
-					lines = append(lines, word[:width])
-					word = word[width:]
-				}
-				if len(word) > 0 {
-					currentLine.WriteString(word)
-					currentWidth = len(word)
-				}
-				continue
-			}
-
-			// Check if word fits on current line
-			if currentWidth == 0 {
-				currentLine.WriteString(word)
-				currentWidth = wordLen
-			} else if currentWidth+1+wordLen <= width {
-				currentLine.WriteString(" ")
-				currentLine.WriteString(word)
-				currentWidth += 1 + wordLen
-			} else {
-				// Word doesn't fit, start new line
-				lines = append(lines, currentLine.String())
-				currentLine.Reset()
-				currentLine.WriteString(word)
-				currentWidth = wordLen
-			}
-		}
-
-		// Flush remaining content
-		if currentWidth > 0 {
-			lines = append(lines, currentLine.String())
-		}
-	}
-
-	return lines
-}
-
 // View renders the text area.
 func (t *TextArea) View() string {
 	thm := theme.Current
@@ -231,13 +158,13 @@ func (t *TextArea) View() string {
 	var content string
 	if t.value == "" && !t.focused && t.placeholder != "" {
 		// Show placeholder with word wrap
-		wrappedPlaceholder := wrapTextArea(t.placeholder, contentWidth)
+		wrappedPlaceholder := util.WrapTextMultiline(t.placeholder, contentWidth)
 		content = lipgloss.NewStyle().
 			Foreground(thm.TextMuted).
 			Render(strings.Join(wrappedPlaceholder, "\n"))
 	} else {
 		// Wrap the text for display
-		wrappedLines := wrapTextArea(t.value, contentWidth)
+		wrappedLines := util.WrapTextMultiline(t.value, contentWidth)
 
 		if t.focused {
 			// Find cursor position in wrapped text
@@ -290,7 +217,7 @@ func (t *TextArea) findCursorLine(width int) int {
 
 	// Get text up to cursor
 	textToCursor := t.value[:t.cursor]
-	wrapped := wrapTextArea(textToCursor, width)
+	wrapped := util.WrapTextMultiline(textToCursor, width)
 	if len(wrapped) == 0 {
 		return 0
 	}

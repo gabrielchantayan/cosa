@@ -5,6 +5,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"cosa/internal/tui/theme"
+	"cosa/internal/tui/util"
 )
 
 // Input is a text input component.
@@ -155,53 +156,6 @@ func (i *Input) HandleKey(key string) {
 	}
 }
 
-// wrapText wraps text to fit within the given width, returning lines.
-// It performs word-aware wrapping to avoid cutting words in the middle.
-func wrapText(text string, width int) []string {
-	if width <= 0 || text == "" {
-		return []string{text}
-	}
-
-	var lines []string
-	runes := []rune(text)
-	start := 0
-
-	for start < len(runes) {
-		end := start + width
-		if end >= len(runes) {
-			lines = append(lines, string(runes[start:]))
-			break
-		}
-
-		// Look for a space to break at (word boundary)
-		breakAt := end
-		foundSpace := false
-		for i := end; i > start; i-- {
-			if runes[i] == ' ' {
-				breakAt = i
-				foundSpace = true
-				break
-			}
-		}
-
-		if foundSpace {
-			// Break at the space, don't include the space in the line
-			lines = append(lines, string(runes[start:breakAt]))
-			start = breakAt + 1 // Skip the space
-		} else {
-			// No space found - word is longer than width, must break mid-word
-			lines = append(lines, string(runes[start:end]))
-			start = end
-		}
-	}
-
-	if len(lines) == 0 {
-		lines = []string{""}
-	}
-
-	return lines
-}
-
 // View renders the input.
 func (i *Input) View() string {
 	t := theme.Current
@@ -311,7 +265,7 @@ func (i *Input) viewMultiline(t theme.Theme, borderColor lipgloss.Color, display
 		Background(t.Primary).
 		Foreground(t.Background)
 
-	lines := wrapText(i.value, displayWidth)
+	lines := util.WrapText(i.value, displayWidth)
 	numLines := len(lines)
 	if numLines < i.minHeight {
 		numLines = i.minHeight
