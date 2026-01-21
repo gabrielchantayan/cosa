@@ -48,6 +48,10 @@ type Job struct {
 	StartedAt   *time.Time `json:"started_at,omitempty"`
 	CompletedAt *time.Time `json:"completed_at,omitempty"`
 
+	// Worktree for this job (created when job starts, cleaned up after merge)
+	Worktree string `json:"worktree,omitempty"` // Path to job's worktree
+	Branch   string `json:"branch,omitempty"`   // Branch name for this job
+
 	// Execution details
 	SessionID string `json:"session_id,omitempty"` // Claude session ID
 	Error     string `json:"error,omitempty"`
@@ -101,6 +105,36 @@ func (j *Job) SetReviewFeedback(feedback []string) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	j.ReviewFeedback = feedback
+}
+
+// SetWorktree sets the worktree path and branch for this job.
+func (j *Job) SetWorktree(worktreePath, branchName string) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.Worktree = worktreePath
+	j.Branch = branchName
+}
+
+// GetWorktree returns the worktree path for this job.
+func (j *Job) GetWorktree() string {
+	j.mu.RLock()
+	defer j.mu.RUnlock()
+	return j.Worktree
+}
+
+// GetBranch returns the branch name for this job.
+func (j *Job) GetBranch() string {
+	j.mu.RLock()
+	defer j.mu.RUnlock()
+	return j.Branch
+}
+
+// ClearWorktree clears the worktree and branch fields (used after cleanup).
+func (j *Job) ClearWorktree() {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.Worktree = ""
+	j.Branch = ""
 }
 
 // Queue marks the job as queued.

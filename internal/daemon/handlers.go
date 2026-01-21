@@ -388,13 +388,27 @@ func (s *Server) handleJobAdd(req *protocol.Request) *protocol.Response {
 			})
 
 			go func() {
+				// Create job worktree before starting
+				if err := s.createJobWorktree(j); err != nil {
+					s.ledger.Append(ledger.EventJobFailed, ledger.JobEventData{
+						ID:          j.ID,
+						Description: j.Description,
+						Worker:      w.ID,
+						WorkerName:  w.Name,
+						Error:       fmt.Sprintf("failed to create job worktree: %v", err),
+					})
+					j.Fail(fmt.Sprintf("failed to create job worktree: %v", err))
+					s.jobs.Save(j)
+					return
+				}
+
 				s.ledger.Append(ledger.EventJobStarted, ledger.JobEventData{
 					ID:          j.ID,
 					Description: j.Description,
 					Worker:      w.ID,
 					WorkerName:  w.Name,
 				})
-				if err := w.Execute(j); err != nil {
+				if err := w.ExecuteInWorktree(j, j.GetWorktree()); err != nil {
 					s.ledger.Append(ledger.EventJobFailed, ledger.JobEventData{
 						ID:          j.ID,
 						Description: j.Description,
@@ -517,13 +531,27 @@ func (s *Server) handleJobAssign(req *protocol.Request) *protocol.Response {
 	})
 
 	go func() {
+		// Create job worktree before starting
+		if err := s.createJobWorktree(j); err != nil {
+			s.ledger.Append(ledger.EventJobFailed, ledger.JobEventData{
+				ID:          j.ID,
+				Description: j.Description,
+				Worker:      w.ID,
+				WorkerName:  w.Name,
+				Error:       fmt.Sprintf("failed to create job worktree: %v", err),
+			})
+			j.Fail(fmt.Sprintf("failed to create job worktree: %v", err))
+			s.jobs.Save(j)
+			return
+		}
+
 		s.ledger.Append(ledger.EventJobStarted, ledger.JobEventData{
 			ID:          j.ID,
 			Description: j.Description,
 			Worker:      w.ID,
 			WorkerName:  w.Name,
 		})
-		if err := w.Execute(j); err != nil {
+		if err := w.ExecuteInWorktree(j, j.GetWorktree()); err != nil {
 			s.ledger.Append(ledger.EventJobFailed, ledger.JobEventData{
 				ID:          j.ID,
 				Description: j.Description,

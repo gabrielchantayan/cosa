@@ -176,8 +176,14 @@ func (w *Worker) Stop() error {
 	return nil
 }
 
-// Execute runs a job on this worker.
+// Execute runs a job on this worker using the worker's default worktree.
 func (w *Worker) Execute(j *job.Job) error {
+	return w.ExecuteInWorktree(j, "")
+}
+
+// ExecuteInWorktree runs a job on this worker in the specified worktree.
+// If worktreePath is empty, uses the worker's default worktree.
+func (w *Worker) ExecuteInWorktree(j *job.Job, worktreePath string) error {
 	w.mu.Lock()
 	if w.Status != StatusIdle {
 		w.mu.Unlock()
@@ -185,9 +191,23 @@ func (w *Worker) Execute(j *job.Job) error {
 	}
 	w.Status = StatusWorking
 	w.CurrentJob = j
+
+	// Determine the working directory
+	workdir := w.Worktree
+	if worktreePath != "" {
+		workdir = worktreePath
+	}
+
+	// Create a new client configured for this job's worktree
+	jobClient := claude.NewClient(claude.ClientConfig{
+		Binary:   w.client.Binary(),
+		Model:    w.client.Model(),
+		MaxTurns: w.client.MaxTurns(),
+		Workdir:  workdir,
+	})
 	w.mu.Unlock()
 
-	w.emitEvent("job_started", fmt.Sprintf("Starting job: %s", j.Description))
+	w.emitEvent("job_started", fmt.Sprintf("Starting job: %s (worktree: %s)", j.Description, workdir))
 
 	// Build prompt for Claude
 	prompt := w.buildPrompt(j)
@@ -195,9 +215,9 @@ func (w *Worker) Execute(j *job.Job) error {
 	// Start or resume Claude session
 	var err error
 	if w.SessionID != "" {
-		err = w.client.Resume(w.ctx, w.SessionID, prompt)
+		err = jobClient.Resume(w.ctx, w.SessionID, prompt)
 	} else {
-		err = w.client.Start(w.ctx, prompt)
+		err = jobClient.Start(w.ctx, prompt)
 	}
 
 	if err != nil {
@@ -205,13 +225,17 @@ func (w *Worker) Execute(j *job.Job) error {
 		return err
 	}
 
-	// Process events from Claude
-	go w.processClaudeEvents(j)
+	// Process events from Claude using the job-specific client
+	go w.processClaudeEventsWithClient(j, jobClient)
 
 	return nil
 }
 
 func (w *Worker) processClaudeEvents(j *job.Job) {
+	w.processClaudeEventsWithClient(j, w.client)
+}
+
+func (w *Worker) processClaudeEventsWithClient(j *job.Job, client *claude.Client) {
 	defer func() {
 		w.mu.Lock()
 		w.Status = StatusIdle
@@ -225,7 +249,7 @@ func (w *Worker) processClaudeEvents(j *job.Job) {
 			w.handleJobFailure(j, w.ctx.Err())
 			return
 
-		case event, ok := <-w.client.Events():
+		case event, ok := <-client.Events():
 			if !ok {
 				// Channel closed, session ended
 				status := j.GetStatus()
@@ -234,7 +258,7 @@ func (w *Worker) processClaudeEvents(j *job.Job) {
 					w.handleJobSuccess(j)
 				} else if status == job.StatusQueued {
 					// Claude exited before sending init event
-					stderr := w.client.StderrOutput()
+					stderr := client.StderrOutput()
 					if stderr != "" {
 						w.handleJobFailure(j, fmt.Errorf("claude exited before starting: %s", stderr))
 					} else {
@@ -246,12 +270,12 @@ func (w *Worker) processClaudeEvents(j *job.Job) {
 
 			w.handleClaudeEvent(j, event)
 
-		case <-w.client.Done():
+		case <-client.Done():
 			status := j.GetStatus()
 			if status == job.StatusRunning {
 				w.handleJobSuccess(j)
 			} else if status == job.StatusQueued {
-				stderr := w.client.StderrOutput()
+				stderr := client.StderrOutput()
 				if stderr != "" {
 					w.handleJobFailure(j, fmt.Errorf("claude exited before starting: %s", stderr))
 				} else {

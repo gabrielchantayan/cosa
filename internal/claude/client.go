@@ -76,6 +76,21 @@ func (c *Client) SessionID() string {
 	return c.sessionID
 }
 
+// Binary returns the claude binary path.
+func (c *Client) Binary() string {
+	return c.binary
+}
+
+// Model returns the model name.
+func (c *Client) Model() string {
+	return c.model
+}
+
+// MaxTurns returns the max turns setting.
+func (c *Client) MaxTurns() int {
+	return c.maxTurns
+}
+
 // Start begins a new Claude session with the given prompt.
 func (c *Client) Start(ctx context.Context, prompt string) error {
 	// Reset channels for new session (in case client is reused)

@@ -273,3 +273,125 @@ func FindMainRepoRoot(path string) (string, error) {
 	// The repo root is its parent
 	return filepath.Dir(gitCommonDir), nil
 }
+
+// CreateJobWorktree creates a new worktree for a specific job.
+// The worktree is placed in a "jobs" subdirectory under the worktree base.
+// The branch name is cosa/job/<shortJobID> based off the given base branch.
+func (m *Manager) CreateJobWorktree(jobID, baseBranch string) (*Worktree, error) {
+	// Use first 8 chars of job ID for shorter branch names
+	shortID := jobID
+	if len(shortID) > 8 {
+		shortID = shortID[:8]
+	}
+
+	jobsDir := filepath.Join(m.worktreeBase, "jobs")
+	worktreePath := filepath.Join(jobsDir, shortID)
+	branchName := fmt.Sprintf("cosa/job/%s", shortID)
+
+	// Ensure the jobs directory exists
+	if err := os.MkdirAll(jobsDir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create jobs directory: %w", err)
+	}
+
+	// Check if worktree already exists
+	if _, err := os.Stat(worktreePath); err == nil {
+		commit, _ := m.getHeadCommit(worktreePath)
+		return &Worktree{
+			Path:   worktreePath,
+			Branch: branchName,
+			Commit: commit,
+		}, nil
+	}
+
+	// Create branch from base
+	if baseBranch == "" {
+		baseBranch = "HEAD"
+	}
+
+	// Check if branch already exists
+	branchExists := m.branchExists(branchName)
+
+	if branchExists {
+		cmd := exec.Command("git", "worktree", "add", worktreePath, branchName)
+		cmd.Dir = m.repoRoot
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return nil, fmt.Errorf("failed to create job worktree: %s: %w", string(out), err)
+		}
+	} else {
+		cmd := exec.Command("git", "worktree", "add", "-b", branchName, worktreePath, baseBranch)
+		cmd.Dir = m.repoRoot
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return nil, fmt.Errorf("failed to create job worktree: %s: %w", string(out), err)
+		}
+	}
+
+	commit, err := m.getHeadCommit(worktreePath)
+	if err != nil {
+		commit = ""
+	}
+
+	return &Worktree{
+		Path:   worktreePath,
+		Branch: branchName,
+		Commit: commit,
+	}, nil
+}
+
+// RemoveJobWorktree removes a job's worktree by job ID.
+func (m *Manager) RemoveJobWorktree(jobID string, force bool) error {
+	shortID := jobID
+	if len(shortID) > 8 {
+		shortID = shortID[:8]
+	}
+
+	jobsDir := filepath.Join(m.worktreeBase, "jobs")
+	worktreePath := filepath.Join(jobsDir, shortID)
+
+	args := []string{"worktree", "remove"}
+	if force {
+		args = append(args, "--force")
+	}
+	args = append(args, worktreePath)
+
+	cmd := exec.Command("git", args...)
+	cmd.Dir = m.repoRoot
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to remove job worktree: %s: %w", string(out), err)
+	}
+
+	return nil
+}
+
+// DeleteBranch deletes a local branch.
+func (m *Manager) DeleteBranch(branchName string, force bool) error {
+	flag := "-d"
+	if force {
+		flag = "-D"
+	}
+
+	cmd := exec.Command("git", "branch", flag, branchName)
+	cmd.Dir = m.repoRoot
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to delete branch: %s: %w", string(out), err)
+	}
+
+	return nil
+}
+
+// GetJobWorktreePath returns the path for a job's worktree.
+func (m *Manager) GetJobWorktreePath(jobID string) string {
+	shortID := jobID
+	if len(shortID) > 8 {
+		shortID = shortID[:8]
+	}
+	return filepath.Join(m.worktreeBase, "jobs", shortID)
+}
+
+// GetJobBranchName returns the branch name for a job.
+func (m *Manager) GetJobBranchName(jobID string) string {
+	shortID := jobID
+	if len(shortID) > 8 {
+		shortID = shortID[:8]
+	}
+	return fmt.Sprintf("cosa/job/%s", shortID)
+}
