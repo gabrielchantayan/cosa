@@ -37,23 +37,40 @@ type Dashboard struct {
 	activity   *component.Activity
 
 	// Dialogs
-	newJobDialog *component.Dialog
-	showDialog   bool
+	newJobDialog     *component.Dialog
+	showDialog       bool
+	templateSelector *component.TemplateSelector
+	showTemplates    bool
 
 	// Callbacks
-	onCreateJob   func(description string)
-	onReassignJob func(jobID string)
+	onCreateJob      func(description string)
+	onReassignJob    func(jobID string)
+	onUseTemplate    func(templateID string, variables map[string]string)
 }
 
 // NewDashboard creates a new dashboard page.
 func NewDashboard() *Dashboard {
-	return &Dashboard{
-		styles:       styles.New(),
-		workerList:   component.NewWorkerList(),
-		jobList:      component.NewJobList(),
-		activity:     component.NewActivity(),
-		newJobDialog: component.NewJobDialog(),
+	d := &Dashboard{
+		styles:           styles.New(),
+		workerList:       component.NewWorkerList(),
+		jobList:          component.NewJobList(),
+		activity:         component.NewActivity(),
+		newJobDialog:     component.NewJobDialog(),
+		templateSelector: component.NewTemplateSelector(),
 	}
+
+	// Set up template selector callbacks
+	d.templateSelector.SetOnSelect(func(templateID string, variables map[string]string) {
+		d.showTemplates = false
+		if d.onUseTemplate != nil {
+			d.onUseTemplate(templateID, variables)
+		}
+	})
+	d.templateSelector.SetOnCancel(func() {
+		d.showTemplates = false
+	})
+
+	return d
 }
 
 // SetSize sets the page dimensions.
@@ -191,6 +208,11 @@ func (d *Dashboard) View() string {
 		return d.renderWithDialogOverlay(base, t)
 	}
 
+	// Overlay template selector if visible
+	if d.showTemplates && d.templateSelector != nil && d.templateSelector.Visible() {
+		return d.renderWithTemplateSelectorOverlay(base, t)
+	}
+
 	return base
 }
 
@@ -200,13 +222,25 @@ func (d *Dashboard) renderWithDialogOverlay(baseView string, t theme.Theme) stri
 	if dialogView == "" {
 		return baseView
 	}
+	return d.overlayOnBase(baseView, dialogView, t)
+}
 
-	dialogWidth := lipgloss.Width(dialogView)
-	dialogHeight := lipgloss.Height(dialogView)
+func (d *Dashboard) renderWithTemplateSelectorOverlay(baseView string, t theme.Theme) string {
+	// Get the template selector view
+	selectorView := d.templateSelector.View()
+	if selectorView == "" {
+		return baseView
+	}
+	return d.overlayOnBase(baseView, selectorView, t)
+}
+
+func (d *Dashboard) overlayOnBase(baseView, overlayView string, t theme.Theme) string {
+	overlayWidth := lipgloss.Width(overlayView)
+	overlayHeight := lipgloss.Height(overlayView)
 
 	// Calculate centering position
-	padLeft := (d.width - dialogWidth) / 2
-	padTop := (d.height - dialogHeight) / 2
+	padLeft := (d.width - overlayWidth) / 2
+	padTop := (d.height - overlayHeight) / 2
 
 	if padLeft < 0 {
 		padLeft = 0
@@ -217,25 +251,25 @@ func (d *Dashboard) renderWithDialogOverlay(baseView string, t theme.Theme) stri
 
 	// Split views into lines
 	baseLines := strings.Split(baseView, "\n")
-	dialogLines := strings.Split(dialogView, "\n")
+	overlayLines := strings.Split(overlayView, "\n")
 
 	// Ensure we have enough base lines
 	for len(baseLines) < d.height {
 		baseLines = append(baseLines, strings.Repeat(" ", d.width))
 	}
 
-	// Overlay the dialog onto the base view at the calculated position
+	// Overlay onto the base view at the calculated position
 	// Use ANSI-aware string manipulation to avoid corrupting escape sequences
 	result := make([]string, len(baseLines))
 	for i := 0; i < len(baseLines); i++ {
-		dialogLineIdx := i - padTop
-		if dialogLineIdx >= 0 && dialogLineIdx < len(dialogLines) {
-			// This line has dialog content - merge it using ANSI-aware functions
+		overlayLineIdx := i - padTop
+		if overlayLineIdx >= 0 && overlayLineIdx < len(overlayLines) {
+			// This line has overlay content - merge it using ANSI-aware functions
 			baseLine := baseLines[i]
-			dialogLine := dialogLines[dialogLineIdx]
-			dialogLineWidth := lipgloss.Width(dialogLine)
+			overlayLine := overlayLines[overlayLineIdx]
+			overlayLineWidth := lipgloss.Width(overlayLine)
 
-			// Build merged line: base prefix + dialog + base suffix
+			// Build merged line: base prefix + overlay + base suffix
 			// ansi.Truncate safely cuts ANSI strings without breaking escape sequences
 			prefix := ansi.Truncate(baseLine, padLeft, "")
 			// Pad prefix if base line was shorter than padLeft
@@ -243,16 +277,16 @@ func (d *Dashboard) renderWithDialogOverlay(baseView string, t theme.Theme) stri
 				prefix += strings.Repeat(" ", padLeft-lipgloss.Width(prefix))
 			}
 
-			// Get suffix from base line after the dialog position
+			// Get suffix from base line after the overlay position
 			// ansi.Cut(s, left, right) extracts characters from position left to right
-			suffixStart := padLeft + dialogLineWidth
+			suffixStart := padLeft + overlayLineWidth
 			suffix := ""
 			baseLineWidth := lipgloss.Width(baseLine)
 			if suffixStart < baseLineWidth {
 				suffix = ansi.Cut(baseLine, suffixStart, baseLineWidth)
 			}
 
-			result[i] = prefix + dialogLine + suffix
+			result[i] = prefix + overlayLine + suffix
 		} else {
 			result[i] = baseLines[i]
 		}
@@ -305,6 +339,7 @@ func (d *Dashboard) renderFooter() string {
 		{"j/k", "navigate"},
 		{"a", "add worker"},
 		{"n", "new job"},
+		{"t", "templates"},
 		{"q", "quit"},
 	}
 
@@ -423,7 +458,13 @@ func max(a, b int) int {
 
 // IsInputMode returns true if the dashboard is in input mode.
 func (d *Dashboard) IsInputMode() bool {
-	return d.showDialog && d.newJobDialog != nil && d.newJobDialog.Visible()
+	if d.showDialog && d.newJobDialog != nil && d.newJobDialog.Visible() {
+		return true
+	}
+	if d.showTemplates && d.templateSelector != nil && d.templateSelector.Visible() {
+		return true
+	}
+	return false
 }
 
 // SetOnCreateJob sets the callback for when a job is created.
@@ -548,4 +589,42 @@ func (d *Dashboard) CloseOverlay() {
 		d.newJobDialog.Hide()
 		d.showDialog = false
 	}
+	if d.showTemplates && d.templateSelector != nil {
+		d.templateSelector.Hide()
+		d.showTemplates = false
+	}
+}
+
+// SetOnUseTemplate sets the callback for when a template is used to create a job.
+func (d *Dashboard) SetOnUseTemplate(fn func(templateID string, variables map[string]string)) {
+	d.onUseTemplate = fn
+}
+
+// SetTemplates sets the available templates for the template selector.
+func (d *Dashboard) SetTemplates(templates []component.TemplateItem) {
+	d.templateSelector.SetTemplates(templates)
+}
+
+// ShowTemplateSelector shows the template selection dialog.
+func (d *Dashboard) ShowTemplateSelector() {
+	d.showTemplates = true
+	d.templateSelector.SetSize(80, 25)
+	d.templateSelector.Show()
+}
+
+// HandleTemplateSelectorKey handles key input for the template selector.
+func (d *Dashboard) HandleTemplateSelectorKey(key string) string {
+	if d.showTemplates && d.templateSelector != nil && d.templateSelector.Visible() {
+		action := d.templateSelector.HandleKey(key)
+		if action == "cancel" || action == "select" {
+			d.showTemplates = false
+		}
+		return action
+	}
+	return ""
+}
+
+// IsTemplateMode returns true if the template selector is visible.
+func (d *Dashboard) IsTemplateMode() bool {
+	return d.showTemplates && d.templateSelector != nil && d.templateSelector.Visible()
 }
